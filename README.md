@@ -5,6 +5,8 @@ above the prompt shows an animated fill bar, the token count, headroom before
 auto-compaction, the usage trend, session cost and rate limits. It also has a one-click
 effort picker and Clawd, who blinks, trots while Claude works and naps when you're idle.
 
+![context-meter above the Claude Code prompt, with the details row and the effort picker open](docs/context-meter.png)
+
 ## Install
 
 Requires Claude Code 2.1.296 or later. Type this at the prompt of a terminal session:
@@ -33,14 +35,6 @@ To load it in every session without a marketplace, add the clone's path to the `
 ```
 
 On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
-
-```
-╭──────────────────────────────────────────────────────────────────────────╮
-│  ▐▛███▜▌   Context █████████▋░░░░░░░░░░░░░ 42% 84.0k / 200.0k               │
-│ ▝▜█████▛▘  auto-compact at 167.0k (83.0k left) · last turn +3.2k · trend ▂▃▅ │
-│   ▘▘ ▝▝    session 1h 12m · $1.84 · 5h 23% · 7d 10% · claude-opus-5-5 details│
-╰──────────────────────────────────────────────────────────────────────────╯
-```
 
 ## What it shows
 
