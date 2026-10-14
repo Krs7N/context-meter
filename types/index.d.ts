@@ -49,8 +49,12 @@ declare module 'claude-code' {
       effort: Effort
       /** Count-up step since the last change, 0..TWEEN_STEPS (done). */
       tweenStep: number
-      /** The effort picker row is shown. */
+      /** The effort picker column is open. */
       isPickerOpen: boolean
+      /** The main loop's model, as `/model` shows it (`$.session.model()`); null until read. */
+      model: string | null
+      /** The model picker column is open. */
+      isModelPickerOpen: boolean
       history: number[]
       frame: number
       /** Frame tick of the last activity; Clawd sleeps once idle long enough. */

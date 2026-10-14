@@ -6,6 +6,8 @@ import type { Effort, Snapshot } from '../types'
 const snap = atom({ plugin: 'context-meter', key: 'snap' } as const, null)
 const effort = atom({ plugin: 'context-meter', key: 'effort' } as const, { isUltra: false } as Effort)
 const isPickerOpen = atom({ plugin: 'context-meter', key: 'isPickerOpen' } as const, false)
+const model = atom({ plugin: 'context-meter', key: 'model' } as const, null as string | null)
+const isModelPickerOpen = atom({ plugin: 'context-meter', key: 'isModelPickerOpen' } as const, false)
 const tweenStep = atom({ plugin: 'context-meter', key: 'tweenStep' } as const, 0)
 const history = atom({ plugin: 'context-meter', key: 'history' } as const, [])
 const frame = atom({ plugin: 'context-meter', key: 'frame' } as const, 0)
@@ -15,27 +17,185 @@ const showDetails = atom({ plugin: 'context-meter', key: 'showDetails' } as cons
 /**
  * Clawd, the Claude Code mascot, as the welcome banner draws him.
  *
- * Every row is 9 cells wide and the four legs stay in columns 2, 3, 5 and 6,
- * right under the body. Walking moves single legs half a cell inside their
- * own column, in diagonal pairs (a trot), so they never drift off the body.
+ * His rows are 9 cells wide. He sits behind an 11-cell keyboard that hides his
+ * legs; his arms are the corner nubs of the body row.
  */
 const CLAWD = {
   eyesOpen: ' ▐▛███▜▌ ',
-  eyesShut: ' ▐█████▌ ',
+  /** Shut eyes: the eye cells as a thin dark line on orange, so he still has eyes. */
+  shutEye: '▁',
   body: '▝▜█████▛▘',
-  stand: '  ▘▘ ▝▝  ',
-  walk: ['  ▘▘ ▝▝  ', '  ▝▘ ▝▘  ', '  ▘▘ ▝▝  ', '  ▘▝ ▘▝  '],
+  /** Typing: left arm down, then right arm down. */
+  typing: ['▗▜█████▛▘', '▝▜█████▛▖'],
+  /** Asleep, away from the keyboard: his four legs, in columns 2, 3, 5 and 6. */
+  legs: '  ▘▘ ▝▝  ',
+  /**
+   * Two rows of keycaps on the case, 11 cells: a key, the spacebar and a key
+   * on top; six keys below. Each cap is the upper half of its cell, so the
+   * case shows between rows and between keys.
+   */
+  keyboard: [' ▀ ▀▀▀▀▀ ▀ ', '▀ ▀ ▀ ▀ ▀ ▀'],
+  /** The keys under each hand, as [row, first cell, end cell]; the spacebar is under both. */
+  keysLeft: [
+    [1, 0, 1],
+    [1, 2, 3],
+    [1, 4, 5],
+    [0, 1, 2],
+    [0, 3, 8],
+  ] as const,
+  keysRight: [
+    [1, 6, 7],
+    [1, 8, 9],
+    [1, 10, 11],
+    [0, 9, 10],
+    [0, 3, 8],
+  ] as const,
   /** Asleep: a row above his head where "zZzZ" grows out from its top-left. */
   zzz: ['   z     ', '  Zz     ', ' zZz     ', 'ZzZz     ', '         '],
+}
+
+/** What Clawd wears for the effort: each level adds to the last, max and ultracode swap it all for a top hat. */
+export type Outfit = 'none' | 'cap' | 'cap-bottles' | 'cap-bottles-glasses' | 'top-hat'
+
+export function outfitFor(e: Effort): Outfit {
+  if (e.isUltra) return 'top-hat'
+  switch (e.level) {
+    case 'medium':
+      return 'cap'
+    case 'high':
+      return 'cap-bottles'
+    case 'xhigh':
+      return 'cap-bottles-glasses'
+    case 'max':
+      return 'top-hat'
+    default:
+      return 'none'
+  }
+}
+
+export type ClawdPiece = { text: string; color?: string; bg?: string; bold?: boolean }
+
+const PAD = '  '
+const CAP_COLOR = 'suggestion'
+const BOTTLE_COLOR = 'success'
+const STRAW_COLOR = 'text'
+const HAT_COLOR = 'merged' // purple in the built-in themes
+const BAND_COLOR = 'warning'
+const GLASSES_COLOR = 'text' // white rims on a dark theme, so they stand out on his orange face
+const KEYBOARD_COLOR = 'subtle' // the case, showing between the keycaps
+const KEY_COLOR = 'inactive'
+const KEY_LIT_COLOR = 'suggestion'
+
+/**
+ * Clawd's rows as colored pieces, 13 cells wide: his 9 plus 2 on each side,
+ * where the high-effort bottles hang. The width never changes with the outfit,
+ * so the stats beside him stay put.
+ */
+export function clawdRows(o: { outfit: Outfit; isShut: boolean; typing?: number; zzz?: string }): ClawdPiece[][] {
+  const C = 'claude'
+  const side = (text: string, color?: string): ClawdPiece => ({ text, color })
+  const hasBottles = o.outfit === 'cap-bottles' || o.outfit === 'cap-bottles-glasses'
+  const hasCap = o.outfit === 'cap' || hasBottles
+  const rows: ClawdPiece[][] = []
+  if (o.zzz !== undefined) rows.push([side(PAD), { text: o.zzz, color: 'subtle', bold: true }, side(PAD)])
+
+  if (o.outfit === 'top-hat') {
+    rows.push([side(`${PAD}  ▄▄▄▄▄  ${PAD}`, HAT_COLOR)])
+    rows.push([side(`${PAD}  █████  ${PAD}`, HAT_COLOR)])
+    rows.push([side(`${PAD}  `), { text: '█████', color: BAND_COLOR }, side(`  ${PAD}`)])
+    rows.push([side(`${PAD}▄▄█████▄▄${PAD}`, HAT_COLOR)])
+  }
+  // A cap seen from the front: a small crown on top, then the dome flaring into the brim,
+  // as wide as his head. With bottles, each one sits in a holder strapped to the cap's side.
+  if (hasCap) {
+    rows.push([
+      hasBottles ? side(' ▄', BOTTLE_COLOR) : side(PAD),
+      { text: '   ▄▄▄   ', color: CAP_COLOR },
+      hasBottles ? side('▄ ', BOTTLE_COLOR) : side(PAD),
+    ])
+    rows.push(
+      hasBottles
+        ? [
+            side(' █', BOTTLE_COLOR),
+            { text: '━▟█████▙━', color: CAP_COLOR },
+            side('█ ', BOTTLE_COLOR),
+          ]
+        : [side(PAD), { text: ' ▟█████▙ ', color: CAP_COLOR }, side(PAD)],
+    )
+  }
+
+  // Straws run from each bottle's bottom down and into his face.
+  const left = hasBottles ? side(' ╰', STRAW_COLOR) : side(PAD)
+  const right = hasBottles ? side('╯ ', STRAW_COLOR) : side(PAD)
+  const inner = (text: string): ClawdPiece => (hasBottles ? side('─', STRAW_COLOR) : side(text))
+  if (o.outfit === 'cap-bottles-glasses') {
+    // Round white rims around each eye, a bridge between them; the eyes shut inside the rims.
+    const rim = (text: string): ClawdPiece => ({ text, color: GLASSES_COLOR, bg: C, bold: true })
+    const pupil: ClawdPiece = { text: o.isShut ? '─' : '●', color: 'inverseText', bg: C }
+    rows.push([left, inner(' '), rim('('), pupil, rim(')─('), pupil, rim(')'), inner(' '), right])
+  } else if (o.isShut) {
+    rows.push([
+      left,
+      inner(' '),
+      { text: '▐', color: C },
+      { text: CLAWD.shutEye, color: 'inverseText', bg: C },
+      { text: '███', color: C },
+      { text: CLAWD.shutEye, color: 'inverseText', bg: C },
+      { text: '▌', color: C },
+      inner(' '),
+      right,
+    ])
+  } else {
+    rows.push([left, inner(' '), { text: CLAWD.eyesOpen.trim(), color: C }, inner(' '), right])
+  }
+  // He sits behind a keyboard. Typing, one arm reaches down at a time and a key under it lights up.
+  const t = o.typing
+  const body = (t === undefined ? undefined : CLAWD.typing[t % CLAWD.typing.length]) ?? CLAWD.body
+  rows.push([side(PAD), { text: body, color: C }, side(PAD)])
+  // Asleep he has left the keyboard: his legs show again where it stood.
+  if (o.zzz !== undefined) {
+    rows.push([side(PAD), { text: CLAWD.legs, color: C }, side(PAD)])
+    return rows
+  }
+  const lit = t === undefined ? undefined : litKey(t)
+  CLAWD.keyboard.forEach((line, r) => {
+    const cells = [...line]
+    const cap = (text: string, isLit = false): ClawdPiece => ({
+      text,
+      color: isLit ? KEY_LIT_COLOR : KEY_COLOR,
+      bg: KEYBOARD_COLOR,
+      bold: isLit,
+    })
+    const pieces =
+      lit && lit[0] === r
+        ? [
+            cap(cells.slice(0, lit[1]).join('')),
+            cap(cells.slice(lit[1], lit[2]).join(''), true),
+            cap(cells.slice(lit[2]).join('')),
+          ].filter(p => p.text !== '')
+        : [cap(line)]
+    rows.push([side(' '), ...pieces, side(' ')])
+  })
+  return rows
+}
+
+/**
+ * The key that lights up on typing frame `t`: one under the arm that is down
+ * (left on even frames, right on odd), picked pseudo-randomly from the frame.
+ */
+export function litKey(t: number): readonly [number, number, number] {
+  const keys = t % 2 === 0 ? CLAWD.keysLeft : CLAWD.keysRight
+  const pick = Math.floor(t / 2) * 7 + 3 // walks the keys in a jumbled order
+  return keys[pick % keys.length] ?? keys[0]
 }
 
 const TICK_MS = 700
 const BLINK_EVERY = 6 // ticks: a 0.7 s blink about every 4 s
 const HISTORY_LEN = 16
-const HIGHLIGHT_TICKS = 10 // a changed number stays highlighted about 7 s
+const HIGHLIGHT_TICKS = 14 // a changed number stays highlighted about 10 s
 const HL_COLOR = 'suggestion'
-const TWEEN_STEPS = 30 // a changed number counts up in 30 steps…
-const TWEEN_MS = 100 // …of 0.1 s: 3 s in all
+const TWEEN_STEPS = 60 // a changed number counts up in 60 steps…
+const TWEEN_MS = 100 // …of 0.1 s: 6 s in all
 
 /** Ease-out: fast at first, settling onto the new value. */
 export function tween(from: number, to: number, step: number): number {
@@ -238,6 +398,7 @@ async function pollSavedEffort($: EngineInterface): Promise<void> {
     if (level === undefined || level === lastSaved) return
     const isFirst = lastSaved === undefined
     lastSaved = level
+    // a newly saved level changes the level only; ultracode stays as it was
     await update($, effort, old => (isFirst && old.level !== undefined ? old : { ...old, level }))
   } catch {
     // settings unreadable: hooks and requests still fill it in
@@ -251,15 +412,103 @@ async function applyEffortOutput($: EngineInterface, text: string | undefined): 
   return true
 }
 
-/** Runs `/effort <choice>` exactly as if typed, then reads back what it set. */
-async function pickEffort($: EngineInterface, choice: string): Promise<void> {
+/**
+ * What a typed `/effort <args>` asks for, read from the arguments alone.
+ * A level leaves ultracode as it is (Claude Code keeps it on across level changes);
+ * `ultracode` or `ultracode on` turns it on, `ultracode off` off. Bare `/effort`, `auto` and
+ * anything else give nothing.
+ */
+export function parseEffortArgs(args: string): Partial<Effort> | undefined {
+  const [word, flag, ...rest] = args.trim().toLowerCase().split(/\s+/)
+  if (rest.length > 0) return undefined
+  if (word === 'ultracode') {
+    if (flag === undefined || flag === 'on') return { isUltra: true }
+    return flag === 'off' ? { isUltra: false } : undefined
+  }
+  if (flag !== undefined) return undefined
+  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(word ?? '') ? { level: word } : undefined
+}
+
+/** A prompt that is a typed `/effort …` command: what it asks for. */
+export function parseEffortCommand(text: string): Partial<Effort> | undefined {
+  const m = /^\s*\/effort(?:\s+(.*))?$/i.exec(text)
+  return m ? parseEffortArgs(m[1] ?? '') : undefined
+}
+
+/**
+ * Runs `/effort <args>` exactly as if typed. What it printed wins when the mod
+ * can read it; otherwise the badge shows what was asked for, since a session-only
+ * choice (max, ultracode) is saved nowhere the mod could read it back from.
+ */
+async function pickEffort($: EngineInterface, args: string): Promise<void> {
   await update($, isPickerOpen, () => false)
   try {
-    const result = await $.command.run({ command: 'effort', args: choice })
+    const result = await $.command.run({ command: 'effort', args })
     const isApplied = await applyEffortOutput($, result.text)
-    if (!isApplied) await $.ui.toast(`/effort ${choice}: ${result.text?.trim() || 'no change reported'}`)
+    if (!isApplied) {
+      const asked = parseEffortArgs(args)
+      if (asked) await update($, effort, old => ({ ...old, ...asked }))
+      $.ui.log(`context-meter: /effort ${args} printed nothing readable; showing what was asked`, { to: 'debug' })
+    }
   } catch (err) {
-    await $.ui.toast(`/effort ${choice} failed: ${err instanceof Error ? err.message : String(err)}`)
+    await $.ui.toast(`/effort ${args} failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/** The models the picker offers, as `/model <alias>` takes them, smallest first. */
+export const MODEL_CHOICES = ['haiku', 'sonnet', 'opus', 'fable'] as const
+type ModelChoice = (typeof MODEL_CHOICES)[number]
+
+/** Which family a model name or id belongs to ("claude-opus-5-5", "Opus 5.5" → "opus"). */
+export function modelFamily(name: string | null | undefined): ModelChoice | undefined {
+  const lower = name?.toLowerCase() ?? ''
+  return MODEL_CHOICES.find(f => lower.includes(f))
+}
+
+/** A model as the badge shows it: "claude-opus-5-5" → "Opus 5.5"; an unknown name as given. */
+export function modelLabel(name: string | null | undefined): string {
+  if (!name) return 'model ?'
+  const family = modelFamily(name)
+  if (!family) return name.replace(/`/g, '')
+  const version = /(\d+)[-.](\d+)/.exec(name)
+  const title = family[0]?.toUpperCase() + family.slice(1)
+  return version ? `${title} ${version[1]}.${version[2]}` : title
+}
+
+/** What `/model <alias>` printed: "Set model to Opus 5.5 …", "Kept model as `Opus 5.5`". */
+export function parseModelOutput(text: string | undefined): string | undefined {
+  const m = /(?:set model to|kept model as)\s+`?([^`\n(]+?)`?(?:\s+and saved\b|\s*\(|\s*$|\n)/i.exec(text ?? '')
+  return m?.[1]?.trim() || undefined
+}
+
+/** The main loop's model, straight from the engine. */
+async function refreshModel($: EngineInterface): Promise<void> {
+  try {
+    const name = await $.session.model()
+    await update($, model, old => (old === name ? old : name))
+  } catch {
+    // no model yet: the badge shows "model ?"
+  }
+}
+
+/**
+ * Runs `/model <alias>`, then reads the model back. When Claude Code wants a
+ * confirmation first (it answers "Kept model as …" to a plugin's run, which cannot
+ * show the dialog) and plugins may not submit slash commands, the mod says what to type.
+ */
+async function pickModel($: EngineInterface, alias: ModelChoice): Promise<void> {
+  await update($, isModelPickerOpen, () => false)
+  try {
+    const result = await $.command.run({ command: 'model', args: alias })
+    const name = parseModelOutput(result.text)
+    if (/kept model as/i.test(result.text ?? '') && modelFamily(name) !== alias) {
+      await $.ui.toast(`Claude Code kept ${modelLabel(name)}: type /model ${alias} to switch (it asks to confirm)`)
+    } else if (name) {
+      await update($, model, () => name)
+    }
+    await refreshModel($)
+  } catch (err) {
+    await $.ui.toast(`/model ${alias} failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -394,7 +643,7 @@ async function onTick($: EngineInterface): Promise<void> {
       await update($, tweenStep, () => step)
     }
     if (subtick % SUBTICKS === 0) await update($, frame, t => t + 1)
-    if (subtick % (SUBTICKS * 2) === 0) await pollSavedEffort($)
+    if (subtick % (SUBTICKS * 2) === 0) await Promise.all([pollSavedEffort($), refreshModel($)])
   } catch {
     // drawing state is best effort
   }
@@ -420,10 +669,17 @@ async function markActive($: EngineInterface): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     startTicker($)
-    await Promise.all([refresh($), refreshEffort($), markActive($)])
+    await Promise.all([refresh($), refreshEffort($), markActive($), refreshModel($)])
     await pollSavedEffort($)
     return next(e)
   })
+
+  // `/model`, typed or picked from the badge: read the model back once it ran.
+  on('command.run', { command: 'model' }, async ($, e, next) => {
+    const result = await next(e)
+    await refreshModel($)
+    return result
+  }).catch(($, e, next) => next(e))
 
   // Also (re)starts the timer: a /clear ends the session without a new session.start.
   on('session.measure', async ($, e, next) => {
@@ -450,6 +706,16 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     startTicker($)
     await markActive($)
+    // A typed `/effort max` or `/effort ultracode` is session-only and saved nowhere
+    // the mod can read; take it from the command line itself.
+    const asked = parseEffortCommand(e.text)
+    if (asked) {
+      try {
+        await update($, effort, old => ({ ...old, ...asked }))
+      } catch {
+        // drawing state is best effort
+      }
+    }
     return next(e)
   })
 
@@ -480,7 +746,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
-    const [s, trend, tick, isDetailed, eff, awake, isPicking, step] = await Promise.all([
+    const [s, trend, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking] = await Promise.all([
       read($, snap),
       read($, history),
       read($, frame),
@@ -489,6 +755,8 @@ export const register: Register = on => {
       read($, awakeTick),
       read($, isPickerOpen),
       read($, tweenStep),
+      read($, model),
+      read($, isModelPickerOpen),
     ])
     if (s === null) return next(e)
 
@@ -504,7 +772,8 @@ export const register: Register = on => {
     const fill = fillColor(percent)
     const isCompact = columns < 72
     const badge = effortBadge(eff)
-    const badgeWidth = (badge ? [...badge.text].length : 8) + 3
+    const modelText = `◇ ${modelLabel(modelName ?? s.model)}`
+    const badgeWidth = (badge ? [...badge.text].length : 8) + 3 + [...modelText].length + 4
     const width = Math.max(10, Math.min(40, columns - (isCompact ? 42 : 60) - badgeWidth))
 
     // A changed number stays highlighted for HIGHLIGHT_TICKS ticks (about 5 s).
@@ -560,21 +829,26 @@ export const register: Register = on => {
       </Box>
     )
 
-    // The picker opens around the badge: lower levels above it, higher ones (and ultracode) below.
-    const current = eff.isUltra ? 'ultracode' : eff.level
-    const at = EFFORT_CHOICES.findIndex(c => c === current)
-    const above = isPicking && at >= 0 ? EFFORT_CHOICES.slice(0, at) : []
-    const below = isPicking ? EFFORT_CHOICES.slice(at + 1) : []
+    // The picker opens around the badge: lower levels above it, higher ones below, the
+    // ultracode switch last. Ultracode rides on top of a level, so the level places the
+    // badge either way, and with ultracode on the switch turns it off.
+    const levels = EFFORT_CHOICES.filter(c => c !== 'ultracode')
+    const at = levels.findIndex(c => c === eff.level)
+    const above = isPicking && at >= 0 ? levels.slice(0, at) : []
+    const below = isPicking ? [...levels.slice(at + 1), 'ultracode' as const] : []
     const choiceButton = (choice: (typeof EFFORT_CHOICES)[number]) => {
+      const isUltraOff = choice === 'ultracode' && eff.isUltra
       // Options are plain text: the badge's inverse colors need its background, so max is drawn in `error`.
-      const look =
-        choice === 'ultracode'
+      const look = isUltraOff
+        ? { text: '✦ ultracode off', color: 'subtle' }
+        : choice === 'ultracode'
           ? { text: '✦ ultracode', color: 'claude' }
           : choice === 'max'
             ? { text: '▲ max', color: 'error' }
             : effortBadge({ level: choice, isUltra: false })
+      const args = isUltraOff ? 'ultracode off' : choice
       return (
-        <Button key={`pick-${choice}`} plain label={choice} onPress={() => pickEffort($, choice)}>
+        <Button key={`pick-${choice}`} plain label={args} onPress={() => pickEffort($, args)}>
           <Text color={look?.color} dimColor={look?.dimColor}>
             {`${look?.text.trim() ?? choice}  `}
           </Text>
@@ -584,7 +858,15 @@ export const register: Register = on => {
     const effortColumn = (
       <Box key="effort-col" flexDirection="column" alignItems="flex-end" flexShrink={0}>
         {above.map(choiceButton)}
-        <Button key="effort" plain label="effort" onPress={() => update($, isPickerOpen, v => !v)}>
+        <Button
+          key="effort"
+          plain
+          label="effort"
+          onPress={async () => {
+            await update($, isModelPickerOpen, () => false)
+            await update($, isPickerOpen, v => !v)
+          }}
+        >
           <Text
             color={badge?.color}
             backgroundColor={badge?.backgroundColor}
@@ -599,13 +881,50 @@ export const register: Register = on => {
       </Box>
     )
 
+    // The model picker works the same way: smaller models above the badge, larger ones below.
+    const family = modelFamily(modelName ?? s.model)
+    const mAt = MODEL_CHOICES.findIndex(c => c === family)
+    const mAbove = isModelPicking && mAt >= 0 ? MODEL_CHOICES.slice(0, mAt) : []
+    const mBelow = isModelPicking ? MODEL_CHOICES.slice(mAt + 1) : []
+    const modelButton = (choice: ModelChoice) => (
+      <Button key={`model-${choice}`} plain label={choice} onPress={() => pickModel($, choice)}>
+        <Text color="text">{`◇ ${modelLabel(choice)}  `}</Text>
+      </Button>
+    )
+    const modelColumn = (
+      <Box key="model-col" flexDirection="column" alignItems="flex-end" flexShrink={0}>
+        {mAbove.map(modelButton)}
+        <Button
+          key="model"
+          plain
+          label="model"
+          onPress={async () => {
+            await update($, isPickerOpen, () => false)
+            await update($, isModelPickerOpen, v => !v)
+          }}
+        >
+          <Text color="text" bold>
+            {modelText}
+          </Text>
+          <Text dimColor>{isModelPicking ? ' ▴' : ' ▾'}</Text>
+        </Button>
+        {mBelow.map(modelButton)}
+      </Box>
+    )
+    const pickers = (
+      <Box key="pickers" flexDirection="row" gap={2} flexShrink={0}>
+        {modelColumn}
+        {effortColumn}
+      </Box>
+    )
+
     if (isCompact) {
       return (
         <Box key="context-meter" flexDirection="row" justifyContent="space-between">
           <Box key="left" flexGrow={1} flexShrink={1} overflow="hidden">
             {meter}
           </Box>
-          {effortColumn}
+          {pickers}
         </Box>
       )
     }
@@ -642,7 +961,6 @@ export const register: Register = on => {
         { text: `${Math.round(shown(key, l.percentUsed))}%`, hl: hl(key) },
       ])
     }
-    if (s.model) line3.push([{ text: s.model }])
 
     // Pieces keep their width; the row clips at its edge instead of squeezing them onto each other.
     const row = (key: string, groups: Seg[][]) => (
@@ -661,20 +979,23 @@ export const register: Register = on => {
     const idleTicks = tick - awake
     const isAsleep = !isWorking && idleTicks >= SLEEP_AFTER_TICKS
     const isBlinking = !isAsleep && tick % BLINK_EVERY === BLINK_EVERY - 1
-    const feet = isWorking ? CLAWD.walk[tick % CLAWD.walk.length] : CLAWD.stand
+    const typing = isWorking ? tick : undefined
     const zzz = CLAWD.zzz[Math.floor((idleTicks - SLEEP_AFTER_TICKS) / 2) % CLAWD.zzz.length]
 
     return (
       <Box key="context-meter" borderStyle="round" borderColor="claude" paddingX={1} flexDirection="row" gap={2}>
-        <Box key="clawd" flexDirection="column">
-          {isAsleep ? (
-            <Text key="zzz" color="subtle" bold>
-              {zzz}
-            </Text>
-          ) : null}
-          <Text color="claude">{isAsleep || isBlinking ? CLAWD.eyesShut : CLAWD.eyesOpen}</Text>
-          <Text color="claude">{CLAWD.body}</Text>
-          <Text color="claude">{feet}</Text>
+        <Box key="clawd" flexDirection="column" flexShrink={0}>
+          {clawdRows({ outfit: outfitFor(eff), isShut: isAsleep || isBlinking, typing, zzz: isAsleep ? zzz : undefined }).map(
+            (row, r) => (
+              <Box key={`clawd${r}`} flexDirection="row">
+                {row.map((p, i) => (
+                  <Text key={`c${r}-${i}`} color={p.color} backgroundColor={p.bg} bold={p.bold}>
+                    {p.text}
+                  </Text>
+                ))}
+              </Box>
+            ),
+          )}
         </Box>
         <Box key="stats" flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
           {meter}
@@ -698,7 +1019,7 @@ export const register: Register = on => {
             </Text>
           ) : null}
         </Box>
-        {effortColumn}
+        {pickers}
       </Box>
     )
   })

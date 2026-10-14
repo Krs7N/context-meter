@@ -3,10 +3,16 @@ import type { SessionUsage } from 'claude-code'
 
 import {
   bar,
+  clawdRows,
+  outfitFor,
   effortBadge,
   fillColor,
   fmtTokens,
+  litKey,
+  modelLabel,
+  parseModelOutput,
   meterRuns,
+  parseEffortCommand,
   parseEffortOutput,
   savedEffort,
   sparkline,
@@ -45,8 +51,8 @@ describe('formatting', () => {
     // only the last 8 readings
     expect(trendText([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toBe('trend ▁▂▃▄▅▆▇█ 3→10%')
     expect(tween(0, 100, 0)).toBe(0)
-    expect(tween(0, 100, 30)).toBe(100)
-    expect(tween(0, 100, 10)).toBeGreaterThan(50) // ease-out: most of the way early
+    expect(tween(0, 100, 60)).toBe(100)
+    expect(tween(0, 100, 20)).toBeGreaterThan(50) // ease-out: most of the way early
   })
 })
 
@@ -75,12 +81,12 @@ test('band shows fill, tokens, cost and limits; a new reading redraws it', async
   // the changed numbers count up from the old reading…
   expect(await ui.find({ type: 'Text', text: /42%▲/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '84.0k' })).toBeDefined()
-  await clock.advance(1000)
+  await clock.advance(2000)
   const midway = await ui.find({ type: 'Text', text: /\d+%▲/ })
   const mid = Number(/(\d+)%/.exec(midway?.text ?? '')?.[1])
   expect(mid).toBeGreaterThan(42)
   expect(mid).toBeLessThan(91)
-  await clock.advance(2500)
+  await clock.advance(4500)
   // …land on the new one, still highlighted
   expect(await ui.find({ type: 'Text', text: /91%▲/ })).toBeDefined()
   const tokens = await ui.find({ type: 'Text', text: '182.0k' })
@@ -124,6 +130,9 @@ test('idle Clawd falls asleep with zZzZ and wakes on a prompt', async ($, on) =>
   await clock.advance(60_000 + 700 * 4)
   expect(await ui.find({ type: 'Text', text: /[zZ]{2}/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeUndefined()
+  // away from the keyboard: legs back in its place
+  expect(await ui.find({ type: 'Text', text: '  ▘▘ ▝▝  ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▀ ▀/ })).toBeUndefined()
   await $.prompt.submit({ text: 'wake up', wait: false, origin: { kind: 'composer' } })
   await clock.advance(700)
   expect(await ui.find({ type: 'Text', text: /[zZ]/ })).toBeUndefined()
@@ -174,8 +183,13 @@ test('the badge opens a picker that runs /effort', async ($, on) => {
   on('session.usage', () => ({ value: usage(50_000, 25) }))
   on('session.start', () => ({ cwd: '.' }))
   const ran: string[] = []
+  let level = 'medium'
   on('command.run', { command: 'effort' }, ($, e) => {
     ran.push(e.args)
+    // Claude Code's own wording; a level change leaves ultracode alone
+    if (e.args === 'ultracode') return { text: `Ultracode on (this session only): workflows. Effort stays ${level}.` } as never
+    if (e.args === 'ultracode off') return { text: `Ultracode off. Effort stays ${level}.` } as never
+    level = e.args
     return { text: `Set effort level to ${e.args} (this session only)` } as never
   })
   mock.clock(on, { now: 600_000 })
@@ -191,7 +205,108 @@ test('the badge opens a picker that runs /effort', async ($, on) => {
   expect(await ui.find({ key: 'pick-low' })).toBeDefined()
   expect(await ui.find({ key: 'pick-max' })).toBeUndefined()
   expect(await ui.find({ key: 'pick-ultracode' })).toBeDefined()
+  // ultracode on puts the magician's hat on; pressing it again switches it off
+  await ui.press({ key: 'pick-ultracode' })
+  expect(await ui.find({ type: 'Text', text: ' ✦ ULTRACODE · MAX ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▄▄█████▄▄/ })).toBeDefined()
+  // a level picked with ultracode on keeps ultracode on, as Claude Code does
+  await ui.press({ key: 'effort' })
+  await ui.press({ key: 'pick-xhigh' })
+  expect(await ui.find({ type: 'Text', text: ' ✦ ULTRACODE · XHIGH ' })).toBeDefined()
+  // the switch under the badge turns it off
+  await ui.press({ key: 'effort' })
+  expect(await ui.find({ type: 'Text', text: /ultracode off/ })).toBeDefined()
+  await ui.press({ key: 'pick-ultracode' })
+  expect(ran).toEqual(['max', 'ultracode', 'xhigh', 'ultracode off'])
+  expect(await ui.find({ type: 'Text', text: /ULTRACODE/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '◆ xhigh' })).toBeDefined()
   await ui.unmount()
+})
+
+test('a pick shows even when /effort prints nothing the mod can read', async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  on('command.run', { command: 'effort' }, () => ({ text: '' }) as never)
+  mock.clock(on, { now: 600_000 })
+  await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120) })
+  await ui.press({ key: 'effort' })
+  await ui.press({ key: 'pick-max' })
+  expect(await ui.find({ type: 'Text', text: ' ▲ MAX ' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('typed /effort arguments', async () => {
+  expect(parseEffortCommand('/effort max')).toEqual({ level: 'max' })
+  expect(parseEffortCommand('/effort ultracode')).toEqual({ isUltra: true })
+  expect(parseEffortCommand('/effort ultracode on')).toEqual({ isUltra: true })
+  expect(parseEffortCommand('/effort ultracode off')).toEqual({ isUltra: false })
+  expect(parseEffortCommand('/effort')).toBeUndefined()
+  expect(parseEffortCommand('/effort auto')).toBeUndefined()
+  expect(parseEffortCommand('make the effort max')).toBeUndefined()
+})
+
+test('the model badge opens a picker that runs /model', async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  let current = 'claude-opus-5-5'
+  on('session.model', () => ({ value: current }) as never)
+  const ran: string[] = []
+  on('command.run', { command: 'model' }, ($, e) => {
+    ran.push(e.args)
+    current = `claude-${e.args}-5-5`
+    return { text: `Set model to ${e.args[0]?.toUpperCase()}${e.args.slice(1)} 5.5 and saved as your default` } as never
+  })
+  mock.clock(on, { now: 600_000 })
+  await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120) })
+  expect(await ui.find({ type: 'Text', text: '◇ Opus 5.5' })).toBeDefined()
+  // smaller models above the badge, larger below
+  await ui.press({ key: 'model' })
+  expect(await ui.find({ key: 'model-haiku' })).toBeDefined()
+  expect(await ui.find({ key: 'model-sonnet' })).toBeDefined()
+  expect(await ui.find({ key: 'model-opus' })).toBeUndefined()
+  expect(await ui.find({ key: 'model-fable' })).toBeDefined()
+  // only one picker open at a time
+  await ui.press({ key: 'effort' })
+  expect(await ui.find({ key: 'model-haiku' })).toBeUndefined()
+  await ui.press({ key: 'model' })
+  expect(await ui.find({ key: 'pick-low' })).toBeUndefined()
+  await ui.press({ key: 'model-sonnet' })
+  expect(ran).toEqual(['sonnet'])
+  expect(await ui.find({ type: 'Text', text: '◇ Sonnet 5.5' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a model switch Claude Code keeps back tells the person what to type', async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as never)
+  on('command.run', { command: 'model' }, () => ({ text: 'Kept model as `Opus 5.5`' }) as never)
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined } as never
+  })
+  mock.clock(on, { now: 600_000 })
+  await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120) })
+  await ui.press({ key: 'model' })
+  await ui.press({ key: 'model-sonnet' })
+  expect(toasts).toEqual(['Claude Code kept Opus 5.5: type /model sonnet to switch (it asks to confirm)'])
+  expect(await ui.find({ type: 'Text', text: '◇ Opus 5.5' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('model names', async () => {
+  expect(modelLabel('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelLabel('Opus 5.5')).toBe('Opus 5.5')
+  expect(modelLabel('claude-fable-5-1')).toBe('Fable 5.1')
+  expect(modelLabel('haiku')).toBe('Haiku')
+  expect(modelLabel(null)).toBe('model ?')
+  expect(parseModelOutput('Kept model as `Opus 5.5`')).toBe('Opus 5.5')
+  expect(parseModelOutput('Set model to Sonnet 5.5 and saved as your default for new sessions')).toBe('Sonnet 5.5')
+  expect(parseModelOutput('something else')).toBeUndefined()
 })
 
 test('saved effort: per-model first, then the top-level default', async () => {
@@ -200,7 +315,7 @@ test('saved effort: per-model first, then the top-level default', async () => {
   expect(savedEffort({})).toBeUndefined()
 })
 
-test('working Clawd walks with legs kept under his body', async ($, on) => {
+test('working Clawd types on his keyboard, one arm at a time', async ($, on) => {
   on('session.usage', () => ({ value: usage(50_000, 25) }))
   on('session.start', () => ({ cwd: '.' }))
   const clock = mock.clock(on, { now: 600_000 })
@@ -208,13 +323,87 @@ test('working Clawd walks with legs kept under his body', async ($, on) => {
   const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120, true) })
   const seen = new Set<string>()
   for (let i = 0; i < 4; i++) {
-    for (const feet of ['  ▘▘ ▝▝  ', '  ▝▘ ▝▘  ', '  ▘▝ ▘▝  ']) {
-      if (await ui.find({ type: 'Text', text: feet })) seen.add(feet)
+    for (const body of ['▗▜█████▛▘', '▝▜█████▛▖']) {
+      if (await ui.find({ type: 'Text', text: body })) seen.add(body)
     }
     await clock.advance(700)
   }
-  expect(seen.size).toBe(3)
+  expect(seen.size).toBe(2)
   await ui.unmount()
+})
+
+test('the keyboard has keycaps, and typing lights keys under the arm that is down', async () => {
+  const kb = (typing?: number) => clawdRows({ outfit: 'none', isShut: false, typing }).slice(-2)
+  const line = (r: ReturnType<typeof kb>[number]) => r.map(p => p.text).join('')
+  // two rows of caps on the case: key, spacebar, key; six keys
+  expect(kb().map(line)).toEqual(['  ▀ ▀▀▀▀▀ ▀  ', ' ▀ ▀ ▀ ▀ ▀ ▀ '])
+  expect(kb().flat().some(p => p.color === 'suggestion')).toBe(false)
+  const seen = new Set<string>()
+  for (let t = 0; t < 20; t++) {
+    const [row, from, to] = litKey(t)
+    // left arm down on even frames: a key in the left half (or the spacebar)
+    if (from !== 3) expect(t % 2 === 0 ? to <= 5 : from >= 6).toBe(true)
+    const lit = kb(t)
+      .flat()
+      .filter(p => p.color === 'suggestion')
+    expect(lit.length).toBe(1)
+    expect(lit[0]?.bg).toBe('subtle')
+    seen.add(`${row}:${from}`)
+  }
+  expect(seen.size).toBeGreaterThan(6) // keys change, not one key over and over
+})
+
+describe('outfits', () => {
+  const colors = (o: Parameters<typeof clawdRows>[0]['outfit']) =>
+    new Set(clawdRows({ outfit: o, isShut: false }).flat().map(p => p.color))
+  const text = (o: Parameters<typeof clawdRows>[0]['outfit'], isShut = false) =>
+    clawdRows({ outfit: o, isShut })
+      .map(r => r.map(p => p.text).join(''))
+      .join('\n')
+  const OUTFITS = ['none', 'cap', 'cap-bottles', 'cap-bottles-glasses', 'top-hat'] as const
+
+  test('effort picks the outfit', async () => {
+    expect(outfitFor({ isUltra: false, level: 'low' })).toBe('none')
+    expect(outfitFor({ isUltra: false, level: 'medium' })).toBe('cap')
+    expect(outfitFor({ isUltra: false, level: 'high' })).toBe('cap-bottles')
+    expect(outfitFor({ isUltra: false, level: 'xhigh' })).toBe('cap-bottles-glasses')
+    expect(outfitFor({ isUltra: false, level: 'max' })).toBe('top-hat')
+    expect(outfitFor({ isUltra: true, level: 'low' })).toBe('top-hat')
+  })
+
+  test('each level adds to the last; the top hat stands alone', async () => {
+    expect(colors('none').has('suggestion')).toBe(false)
+    expect(colors('cap').has('suggestion')).toBe(true)
+    expect(colors('cap-bottles').has('success')).toBe(true)
+    // the cap faces front (symmetric) and the bottles are strapped to it
+    expect(text('cap')).toContain(' ▟█████▙ ')
+    expect(text('cap-bottles')).toContain(' █━▟█████▙━█ ')
+    expect(text('cap-bottles')).toContain('╰─▐▛███▜▌─╯')
+    expect(text('cap-bottles-glasses')).toContain('(●)─(●)')
+    // white rims on his orange face
+    const rim = clawdRows({ outfit: 'cap-bottles-glasses', isShut: false })
+      .flat()
+      .find(p => p.text === '(')
+    expect(rim?.color).toBe('text')
+    expect(rim?.bg).toBe('claude')
+    const hat = colors('top-hat')
+    expect(hat.has('merged')).toBe(true)
+    expect(hat.has('suggestion') || hat.has('success')).toBe(false)
+    expect(text('top-hat')).not.toContain('●')
+    // the width never changes, so the stats beside him stay put
+    for (const o of OUTFITS) {
+      for (const row of [...text(o).split('\n'), ...text(o, true).split('\n')]) expect([...row].length).toBe(13)
+    }
+  })
+
+  test('shut eyes close in every outfit, glasses included', async () => {
+    for (const o of OUTFITS) {
+      expect(text(o, true)).not.toContain('▐▛')
+      expect(text(o, true)).not.toContain('●')
+    }
+    expect(text('cap-bottles-glasses', true)).toContain('(─)─(─)')
+    expect(text('top-hat', true)).toContain('▁███▁')
+  })
 })
 
 test('Clawd blinks about every four seconds', async ($, on) => {
@@ -225,7 +414,10 @@ test('Clawd blinks about every four seconds', async ($, on) => {
   const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120) })
   expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeDefined()
   await clock.advance(700 * 5)
-  expect(await ui.find({ type: 'Text', text: /▐█████▌/ })).toBeDefined()
+  // shut eyes stay visible: thin dark lines on the orange head
+  expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeUndefined()
+  const lid = await ui.find({ type: 'Text', text: '▁' })
+  expect(lid?.props.backgroundColor).toBe('claude')
   await clock.advance(700)
   expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeDefined()
   await ui.unmount()
