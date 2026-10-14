@@ -1,0 +1,12 @@
+{
+  "name": "context-meter",
+  "owner": { "name": "Krs7N", "url": "https://github.com/Krs7N" },
+  "plugins": [
+    {
+      "name": "context-meter",
+      "source": "./",
+      "description": "See your context window fill up as you work: animated fill bar, auto-compact headroom, trend, cost, rate limits, a one-click effort picker and Clawd, who blinks, trots and naps.",
+      "version": "0.2.0"
+    }
+  ]
+}

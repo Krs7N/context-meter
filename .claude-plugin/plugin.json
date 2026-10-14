@@ -1,0 +1,11 @@
+{
+  "name": "context-meter",
+  "version": "0.2.0",
+  "description": "See your context window fill up as you work, no /context needed. A live band above the prompt shows an animated fill bar, token count, auto-compact headroom, usage trend, session cost and rate limits. It also has a one-click effort picker and Clawd, who blinks, trots while Claude works and dozes off when you're idle.",
+  "author": { "name": "Krs7N", "url": "https://github.com/Krs7N" },
+  "homepage": "https://github.com/Krs7N/context-meter",
+  "repository": "https://github.com/Krs7N/context-meter",
+  "license": "MIT",
+  "keywords": ["context", "meter", "tokens", "effort", "mascot", "mod"],
+  "types": "./types/index.d.ts"
+}
