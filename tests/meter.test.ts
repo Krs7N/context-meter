@@ -665,6 +665,44 @@ describe('readings', () => {
     await ui.unmount()
   })
 
+  test('a subagent’s request moves neither the meter nor the badge', async ($, on) => {
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answer(() => 150_000))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const stream = $.turn.step({
+      turnId: 't2',
+      index: 0,
+      model: 'claude-haiku-5-5',
+      effort: 'max',
+      messageCount: 2,
+      agentId: 'agent-1',
+    })
+    for await (const _ of stream) {
+      // nothing streamed
+    }
+    await stream.result
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: '50.0k' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /MAX/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a request that got no response leaves the meter alone', async ($, on) => {
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', async function* (_$: unknown, e: TurnStepInput) {
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: null }
+    })
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'high')
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: '50.0k' })).toBeDefined()
+    await ui.unmount()
+  })
+
   for (const reason of ['clear', 'resume'] as const) {
     test(`/${reason} starts the meter over`, async ($, on) => {
       let current: SessionUsage = usage(150_000, 75)

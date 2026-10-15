@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionUsage } from 'claude-code'
+import type { EngineInterface, Register, SessionUsage, TurnStepInput } from 'claude-code'
 
 import type { Effort, Snapshot } from '../types'
 
@@ -353,6 +353,7 @@ export function effortBadge(e: Effort): EffortBadge | undefined {
       bold: true,
     }
   }
+  if (e.isUnsupported) return { text: '– no effort', dimColor: true }
   switch (level) {
     case undefined:
       return undefined
@@ -394,7 +395,8 @@ export function parseEffortOutput(text: string): Partial<Effort> {
  */
 async function refreshEffort($: EngineInterface): Promise<void> {
   try {
-    if ((await read($, effort)).level !== undefined) return
+    const known = await read($, effort)
+    if (known.level !== undefined || known.isUnsupported) return
     const row = (await $.config.list()).find(r => /^effort/i.test(r.key) || /^effort/i.test(r.label))
     const level = row?.value
     if (typeof level !== 'string' && typeof level !== 'number') return
@@ -442,6 +444,27 @@ async function pollSavedEffort($: EngineInterface): Promise<void> {
     )
   } catch {
     // settings unreadable: hooks and requests still fill it in
+  }
+}
+
+/**
+ * The effort a main-thread request carried, after any downgrade for the model. None
+ * means the model takes no effort, so the old level must not linger on the badge.
+ * Ultracode is left as it is: requests do not carry it.
+ */
+async function noteEffort($: EngineInterface, level: TurnStepInput['effort']): Promise<void> {
+  try {
+    await update($, effort, old =>
+      level === undefined
+        ? old.isUnsupported && old.level === undefined
+          ? old
+          : { ...old, level: undefined, isUnsupported: true }
+        : old.level === level && !old.isUnsupported
+          ? old
+          : { ...old, level, isUnsupported: false },
+    )
+  } catch {
+    // drawing state is best effort; never hold up the request
   }
 }
 
@@ -662,14 +685,19 @@ export function toSnapshot(
   return next
 }
 
-/** Each changed number's old value, the start of its count-up; a new last-turn growth counts from 0. */
+/**
+ * Each changed number's old value, the start of its count-up. A finished turn's growth
+ * counts on from the "this turn" figure the live readings showed, else from 0.
+ */
 function fromValues(old: Snapshot, keys: readonly string[]): Record<string, number> {
   const from: Record<string, number> = {}
   for (const key of keys) {
     if (key === 'tokens' && old.tokens !== undefined) from.tokens = old.tokens
     else if (key === 'headroom' && old.compactAt !== undefined && old.tokens !== undefined) {
       from.headroom = Math.max(0, old.compactAt - old.tokens)
-    } else if (key === 'delta') from.delta = 0
+    } else if (key === 'delta') {
+      from.delta = old.tokens !== undefined && old.turnBase !== undefined ? old.tokens - old.turnBase : 0
+    }
     else if (key === 'percent' && old.percent !== undefined) from.percent = old.percent
     else if (key === 'usd' && old.usd !== undefined) from.usd = old.usd
     else if (key.startsWith('limit:')) {
@@ -814,18 +842,22 @@ export const register: Register = on => {
     return result
   })
 
-  // The effort the main thread actually sends, after any downgrade for the model.
+  // One model request. The main thread's carries the effort actually sent, and its
+  // response the context's size: the meter moves with each request, not only at turn ends.
+  // Nothing is awaited before the request goes on.
   on('turn.step', async function* ($, e, next) {
-    await markActive($)
-    if (e.agentId === undefined && e.effort !== undefined) {
-      const level = e.effort
-      try {
-        await update($, effort, old => (old.level === level ? old : { ...old, level }))
-      } catch {
-        // drawing state is best effort; never hold up the request
-      }
+    const isMain = e.agentId === undefined
+    const noted = Promise.all([markActive($), isMain ? noteEffort($, e.effort) : undefined])
+    const result = yield* next(e)
+    await noted
+    const u = result.usage
+    if (isMain && u) {
+      await refresh($, {
+        breakdown: false,
+        stepTokens: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
+      })
     }
-    return yield* next(e)
+    return result
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -1073,11 +1105,19 @@ export const register: Register = on => {
       }
       line2.push(seg)
     }
-    if (s.lastDelta !== undefined && s.lastDelta !== 0) {
-      const delta = shown('delta', s.lastDelta)
+    // While Claude works, the running turn's growth so far; between turns, the last turn's.
+    const turnGrowth =
+      isWorking && s.turnBase !== undefined && s.tokens !== undefined
+        ? Math.round(shown('tokens', s.tokens) - s.turnBase)
+        : 0
+    // the sign is the final value's: a count-up passes through 0
+    const signed = (n: number, final = n) => `${final > 0 ? '+' : '−'}${fmtTokens(Math.abs(n))}`
+    if (turnGrowth !== 0) {
+      line2.push([{ text: 'this turn ' }, { text: signed(turnGrowth), hl: hl('tokens') }])
+    } else if (s.lastDelta !== undefined && s.lastDelta !== 0) {
       line2.push([
         { text: 'last turn ' },
-        { text: `${s.lastDelta > 0 ? '+' : '−'}${fmtTokens(Math.abs(delta))}`, hl: hl('delta') },
+        { text: signed(shown('delta', s.lastDelta), s.lastDelta), hl: hl('delta') },
       ])
     }
     if (trendTokens.length > 1) line2.push([{ text: trendText(trendTokens, s.window) }])
