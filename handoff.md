@@ -5,7 +5,7 @@
 Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that draws a live context-window band above the prompt: fill bar, tokens, auto-compact headroom, trend, cost, rate limits, a model picker, an effort picker, and Clawd the mascot (outfits per effort, typing on a keyboard, sleeping).
 
 - Repo: https://github.com/Krs7N/context-meter (public). The repo is its own marketplace: `/plugin install context-meter --marketplace Krs7N/context-meter`. Needs Claude Code 2.1.296 or later (developed on 2.1.299).
-- **Current stage:** the 2026-10-15 audit batch is **coded and green** on branch `fix/audit-bugs` (plan Tasks 0–7, except the check by eye). No version bump. Next: the user checks it by eye in a real terminal, then decides between some of the upgrades and the subagent panel.
+- **Current stage:** the 2026-10-15 audit batch is **coded and green** on branch `fix/audit-bugs` (plan Tasks 0–7, except the check by eye), with the Claude Code Desktop fix, as **version 0.3.1** (bumped on the branch at the user's word, 2026-10-15). Not released yet: not merged to `main`, no tag. Next: the results of the bug audit decide what else goes into 0.3.1; then the user checks it by eye in a real terminal and in Desktop, then the release, then the choice between some of the upgrades and the subagent panel.
 - **Background documents** (their line references are as of v0.3.0, now stale):
   - `docs/superpowers/specs/2026-10-15-audit-and-next-steps.md`: the audit, the engine facts behind it, each bug with its fix, what is left out and why, assumptions to check by eye (section 6), the open `/model` bug (section 7), how to verify (section 8), and the guide for deciding what comes after the batch (section 9).
   - `docs/superpowers/plans/2026-10-15-audit-bug-fixes.md`: the ordered tasks (0–7) as planned.
@@ -25,8 +25,8 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
 - `hooks/register.tsx`: all logic. Readings: `refresh($, { breakdown, isTurnEnd, isFresh, stepTokens })` → `toSnapshot(u, now, previous, tick, isTurnEnd)`. Hooks: `turn.step` (live reading + `noteEffort`), `session.measure` (turn end vs cost-only), `session.compact`, `session.end` (`startOver` on `/clear` and `/resume`), `refreshModel` (full reading on a model change).
 - `types/index.d.ts`: the `$.state` contract. Every atom used in `register.tsx` must be declared here or `validate` fails. Now has `Snapshot.turnBase`, `windowFrom`, `isAutoCompact`, `compaction`, `Effort.isUnsupported`, and `trend` (tokens) in place of `history` (percents).
 - `tests/meter.test.ts`: the suite. Helpers: `usageIn`, `breakdownOf`, `props(columns, isWorking, maxRows)`, `START`, `band`, `answer` (the engine's answer to a `turn.step`), `request` (one main-thread `$.turn.step`), `turnEnds` (a `session.measure` with `changed: ['context']`), `ASKED` / `SUMMARY`.
-- `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`: the version lives in **both**. Not bumped.
-- `CHANGELOG.md` (`## Unreleased` holds this batch), `README.md` (rows, badges, layouts, hooks updated), `docs/context-meter.png` (README screenshot; the user supplies it as `Downloads/context-meter.png`; a new one is due with the release, row 2 changed).
+- `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`: the version lives in **both**. Both say 0.3.1.
+- `CHANGELOG.md` (`## 0.3.1 — 2026-10-15` holds this batch), `README.md` (rows, badges, layouts, hooks updated), `docs/context-meter.png` (README screenshot; the user supplies it as `Downloads/context-meter.png`; a new one is due with the release, row 2 changed).
 - `tsconfig.json` extends `./.claude-plugin/types/tsconfig.json` (gitignored; written by the engine when it loads the mod from this folder).
 
 ## Changes Made
@@ -69,7 +69,7 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
 2. **`/model` first** (spec section 7): `/model sonnet` in a fresh local session, then again without `switchModelsOnFlag`. Until a switch works on the user's PC, the model-switch fixes cannot be seen there.
 3. **Check by eye** (spec sections 6 and 8), in a local terminal on the branch: `claude --plugin-dir .` (it replaces the installed copy; confirm `hooks module context-meter … loaded` in `claude --debug=hooks`). Try a long turn (the meter moves per request, `this turn +…`), `/model` to a smaller window (window note, no spike, over-window warning), `/compact` (`~after`, `compacted … → …`), `/clear` and `/resume` (meter empties within a second, Clawd keeps animating), a short fullscreen terminal (one-line meter), a model without effort (`– no effort`). Where a spec section 6 assumption fails, apply its fallback with a test.
 4. **Decide what comes next** with the user (spec section 9): upgrades or the subagent panel. Ask the four questions in that section. Recommended order: release the bug batch, then upgrades 1, 4, 5 (and 2), then the panel; swap the last two if subagents are an everyday tool. Worth weighing: the Anthropic Directory already lists two "Context Bar" mods and an "Odometer" drawing the same kind of band.
-5. **Release** when the user names the version: spec section 9, "Release steps". Move `## Unreleased` in `CHANGELOG.md` under the version; new README screenshot.
+5. **Release 0.3.1** once the audit's fixes are in and the eye check passes: spec section 9, "Release steps" (the version is already bumped; fix the changelog date if it moves; new README screenshot). Merge to `main`, tag `v0.3.1`, `gh release create`. Ask before pushing `main` and the tag.
 
 **User preferences:**
 - Caveman (terse) replies.

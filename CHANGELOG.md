@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 — 2026-10-15
 
 - The meter moves during a turn: each model request updates the fill, and row 2 shows `this turn +12.0k` while Claude works. `last turn` is now the whole turn's growth.
 - A model switch redraws the meter at once: the new window, auto-compact point and headroom, with a `window 1.00M → 200.0k` note instead of a `▲` and a count-up. The badge takes the new model's saved effort.
