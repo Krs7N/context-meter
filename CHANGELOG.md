@@ -7,7 +7,7 @@
 - A context bigger than the window (after a switch to a smaller model) says what happens next: `! 150.0k over the 200.0k window: next send compacts`, or `/compact before sending` with auto-compaction off. The tokens turn red, in the one-line meter too.
 - The trend keeps tokens, so a smaller window no longer draws a fake spike; its percents are of the window shown now.
 - `/clear` and `/resume` start the meter over: no `last turn −125.0k`, no `▼` and no trend across conversations. Clawd keeps animating after `/resume`.
-- `/compact` redraws at once: `~31.0k / 200.0k tokens` until the next reply, and `compacted 182.0k → 31.0k` in row 2.
+- `/compact` redraws at once with what it left, `~31.0k / 200.0k tokens`, until the next reply, and `compacted 182.0k → 31.0k` in row 2.
 - A model that takes no effort shows `– no effort` instead of the last model's level and outfit.
 - A short band slot (fullscreen, a low terminal) gets the one-line meter instead of a band that scrolls and cuts Clawd.
 - The session clock runs between readings, and counts days: `1d 2h`.
@@ -17,6 +17,12 @@
 - When Claude Code keeps the model, the toast no longer advises typing `/model`, which answers the same: `Claude Code kept Opus 5.5: /model sonnet did not switch`.
 - A reload during a count-up lands the numbers instead of freezing them midway.
 - Less work per turn: the breakdown is read only when the fill moved, `/config` only until the effort is known, and nothing is awaited before a request is sent.
+- A turn's end is taken from the turn itself. A rate-limit window moving mid-turn no longer cuts the turn in two (a short `last turn`, an extra trend point).
+- An open picker counts in the band's height. A band it would make too tall becomes the one-line meter, and in a very short slot its choices are drawn in a row.
+- Nothing is cut mid-figure. The meter row and rows 2 and 3 leave out whole pieces where they lack room, least important first, and the auto-compact point shortens to `┊ 83.0k left`.
+- An effort pick that `/effort` refuses, caps or overrides shows what is in force, and a toast quotes why. A refused ultracode no longer shows ULTRACODE and the top hat.
+- The saved effort is found on a 1M-context model and for dated model ids.
+- Where nothing draws the band (`claude -p`, the Agent SDK, VS Code), the mod does no work. It starts when Claude Code Desktop attaches.
 - Claude Code Desktop: Clawd is drawn as a picture, so his rows no longer split or shift. The band's text uses the monospaced face, so the bar, numbers and columns line up as in the terminal. The terminal is unchanged.
 
 ## 0.3.0 — 2026-10-14

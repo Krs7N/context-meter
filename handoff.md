@@ -14,7 +14,7 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
 
 - **`main`:** v0.3.0, released (tag `v0.3.0`). Untouched.
 - **Branch `fix/audit-bugs`:** all 17 audit bugs fixed, plus two gaps found while finishing (see Changes Made). One commit per plan task. **Not pushed yet** unless the user said so after 2026-10-15's cloud session (check `git status` against `origin`).
-- **Tests:** `claude plugin test context-meter` gives **45 pass, 0 fail** (the 35 from the red stage, the plan's 5 extra tests, 3 more for the deviations below, 2 for Desktop). `claude plugin validate context-meter` passes with the one old warning (no marketplace description). `tsc` 5.6.3 is clean.
+- **Tests:** `claude plugin test context-meter` gives **55 pass, 0 fail**. `claude plugin validate context-meter` passes with the one old warning (no marketplace description). `tsc` 5.6.3 is clean.
 - **Type-check without `.claude-plugin/types/`:** a tsconfig kept outside the repo, `include` = the plugin-authoring skill's `types/claude-code.d.ts` plus the repo's `hooks`, `types`, `tests` (compilerOptions from that file's header), then `npx -y -p typescript@5.6.3 tsc -p <that tsconfig>`.
 - **Installed copy:** `context-meter@context-meter` 0.3.0 at user scope on the user's PC. `--plugin-dir .` **replaces** a same-named installed plugin (2.1.300 logs `from --plugin-dir overrides installed version`), so the old "two meters draw" note was wrong; two meters most likely came from the old copy in `~/.claude/dev-mods/450e8183-…/`. The trap: if the repo copy fails to load, there is no meter at all while `claude plugin list` still shows the installed one enabled. Check `claude --debug=hooks` for `hooks module context-meter … loaded` / `not loaded: <reason>`.
 - **Cloud sessions:** the mod cannot be seen there. They skip user-scope plugins and the repo's `enabledPlugins`, and the docs say the band does not draw in cloud sessions. `claude --teleport` (from the local clone, clean tree) copies a cloud session and its branch to the terminal.
@@ -44,6 +44,18 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
   - A model switch clears `isUnsupported`, so `– no effort` does not outlast a switch back to a model with effort.
   - `refreshEffort` skips `/config` while `isUnsupported` too, so a model without effort does not get a level back from `/config`.
 - **2026-10-15, Claude Code Desktop:** the user reported Clawd and the layout broken in Desktop, fine in the terminal. Cause (2.1.300 API): Desktop draws `Text` in its page font unless `mono`, and block glyphs leave gaps between lines. Fix: off the terminal every Text gets `mono`, and Clawd is one `Svg` (`clawdSvg`), checked by screenshots in headless Chromium for all outfits, dark and light. Not seen in Desktop itself yet. Still open: Desktop draws `Button`s as native buttons (badges, pickers), and whether its spans collapse runs of spaces is unknown; ask the user for a screenshot.
+- **2026-10-15, audit follow-up:** a multi-agent audit (stopped partway at the user's word) found 50 candidate issues; 1 was confirmed by 3 of 3 checks before it stopped. The user had the high and medium ones fixed, each proven first by a test that fails on the old code. Fixed, one commit each:
+  1. turn ends now come from `turn.complete` (a mid-turn rate-limit measure had been taken for a turn end);
+  2. `/compact` no longer reads usage before the engine installs the compaction;
+  3. an open picker counts in the band's height (choices in a row in a very short slot);
+  4. nothing is cut mid-figure (`planMeter`, `fitGroups`);
+  5. a refused, capped or overridden effort shows what is in force, with a toast (wording from the 2.1.300 binary);
+  6. the saved effort is found on 1M models and dated ids;
+  7. no work where nothing draws (`isDrawn`, `session.attach`/`detach`);
+  8. the subagent test can now fail;
+  9. the two clock-heavy tests get 20 s (they timed out at 5 s with 6 suites in parallel).
+
+  Not reproduced, so no code change: a reading answered after `/clear` landing on the fresh meter; the engine abandons the old conversation's dispatches, and a guard test pins that. The low and trivial findings wait for the user's pick; the list is in this session's scratchpad (`audit-dedup.json`) and in the chat.
 - **CLAUDE.md** added (commands, architecture, engine rules, Desktop notes, preferences).
 - **Two tests corrected (they could not pass as written):** the session clock test advances one more 0.7 s frame (the band redraws on Clawd's frames; the last one before 12:00 lands at 11:59.7). The `/clear` and `/resume` tests asserted "eyes open" and then "eyes shut" exactly one blink period apart, which never holds while the timer runs, and after a turn end, whose measure restarts the timer anyway; they now watch one blink period before the next turn ends, and a stopped timer fails them (checked with a mutant).
 
