@@ -1100,7 +1100,9 @@ export const register: Register = on => {
   })
 
   // A main-conversation compaction (/compact, or auto at the threshold): no measure
-  // follows until the next reply, so record what it freed and redraw now.
+  // follows until the next reply, so record what it freed and redraw now. The engine
+  // installs the compacted conversation only once every hook returned, so usage() would
+  // still read the old fill here: until the next reply, the fill is what the compaction left.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
@@ -1108,9 +1110,14 @@ export const register: Register = on => {
         await update($, snap, s =>
           s === null
             ? s
-            : { ...s, compaction: { before: result.tokensBefore ?? s.tokens, after: result.tokensAfter }, turnBase: undefined },
+            : {
+                ...s,
+                compaction: { before: result.tokensBefore ?? s.tokens, after: result.tokensAfter },
+                tokens: undefined,
+                percent: undefined,
+                turnBase: undefined,
+              },
         )
-        await refresh($)
       } catch {
         // drawing state is best effort
       }

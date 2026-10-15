@@ -868,9 +868,10 @@ describe('readings', () => {
     on('session.compact', () => ({ messages: [SUMMARY], tokensBefore: 182_000, tokensAfter: 31_000 }))
     const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
-    // just compacted: no reply has measured the window yet
-    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
+    // the engine installs the compacted conversation once every hook returned: while the
+    // hooks run, usage() still reads the old fill; after, no reply has measured the window yet
     await $.session.compact({ trigger: 'manual', messages: [ASKED, SUMMARY] })
+    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
     await clock.advance(7000)
     const ui = await band($, 140)
     expect(await ui.find({ type: 'Text', text: /91%/ })).toBeUndefined()
@@ -887,8 +888,8 @@ describe('readings', () => {
     on('turn.step', answer(() => 40_000))
     const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
-    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
     await $.session.compact({ trigger: 'auto', messages: [ASKED, SUMMARY] })
+    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
     await request($, 'high')
     await clock.advance(7000)
     const ui = await band($, 140, true)
@@ -908,8 +909,8 @@ describe('readings', () => {
     on('turn.step', answer(() => context))
     const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
-    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
     await $.session.compact({ trigger: 'manual', messages: [ASKED, SUMMARY] })
+    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
     // the first turn after it is measured from nothing: the compaction stays the news
     await request($, 'high')
     current = usage(40_000, 20)
