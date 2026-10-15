@@ -43,7 +43,12 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
   - `ui.render` `{ component: 'AbovePrompt' }`: the band.
 - **Only where it is drawn.** `isDrawn` says whether a terminal or Desktop draws the band. `session.start` sets it from `e.surface`, `session.attach`/`session.detach` keep it up to date, and a render while it is false sets it. Without one, the ticker, its polls and the readings do not run (`claude -p`, the SDK, VS Code).
 - **One timer.** Every animation (count-up, Clawd's frames, blink, sleep) and the 1.4 s polls (saved effort, `$.session.model()`) run on a single `$.clock.every(100)` ticker (`startTicker`/`onTick`). A hook's own `sleep` loops die with its dispatch budget, so don't add them.
-- **Render.** The band redraws when an atom it read changes; `frame` changes every 0.7 s, so the band redraws at least that often. It picks the one-line layout below 72 columns or when the full band is taller than `props.maxRows`, and otherwise draws the full layout: Clawd (`clawdRows`, 13 cells wide in every outfit) beside three stats rows. Elements come from `$.ui.resolve(e)`, never globals.
+- **Render.** The band redraws when an atom it read changes; `frame` changes every 0.7 s, so the band redraws at least that often. It picks the one-line layout below 72 columns, when the stats column is too narrow for the bar, the percent and the tokens, or when the full band (an open picker included) is taller than `props.maxRows`. Otherwise it draws the full layout: Clawd (`clawdRows`, 13 cells wide in every outfit) beside three stats rows. Elements come from `$.ui.resolve(e)`, never globals.
+- **Room.** Only where a row lacks room does it leave out pieces, whole, never cutting a figure:
+  - the meter row (`planMeter`) drops the word `tokens`, then `Context`, then the window;
+  - rows 2 and 3 (`fitGroups`, by rank) shorten the auto-compact point to `┊ 83.0k left` and drop the session's length or the trend first.
+
+  With room, everything shows. The user confirmed this after first taking it for a permanent removal, so don't revert it to clipping.
 
 ## Engine rules that bite
 
@@ -83,6 +88,5 @@ Helpers in the test file:
 ## Working with the user
 
 - Replies: terse.
-- The band's pieces stay: the meter row's `Context` and `… / … tokens`, row 2's whole `┊ auto-compact at … (… left)` and row 3's `session …` always show. Never drop or shorten them (the user's call); only trailing figures may be left out, whole.
 - Visuals: one tweak at a time, so they can judge each change.
 - Pushing: the repo is public, so ask before pushing.
