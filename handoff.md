@@ -5,7 +5,7 @@
 Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that draws a live context-window band above the prompt: fill bar, tokens, auto-compact headroom, trend, cost, rate limits, a model picker, an effort picker, and Clawd the mascot (outfits per effort, typing on a keyboard, sleeping).
 
 - Repo: https://github.com/Krs7N/context-meter (public). The repo is its own marketplace: `/plugin install context-meter --marketplace Krs7N/context-meter`. Needs Claude Code 2.1.296 or later. 0.3.1 was developed and tested on 2.1.300; 2.1.296's binary has every hook 0.3.1 uses (checked by searching its strings, not by running it). The `mono` prop that Desktop's drawing uses may be newer: 2.1.300's docs name it, 2.1.296's don't.
-- **Current stage:** **0.3.1 is released** (2026-10-15): `fix/audit-bugs` fast-forwarded into `main`, tag `v0.3.1`. The GitHub Release page is published by hand from a prefilled link, because cloud sessions have no tool that creates one. It shipped **without the check by eye**: Desktop's drawing has been seen only as screenshots of the Svg in headless Chromium. Next: the user's check by eye in a real terminal and in Desktop, a new README screenshot, the open questions in Next Steps, then the choice between some of the upgrades and the subagent panel.
+- **Current stage:** **0.3.1 is on `main`** (2026-10-15): `fix/audit-bugs` fast-forwarded into it. The tag `v0.3.1` and the GitHub Release come from GitHub's release form, published by the user: the cloud session's git proxy refused the tag push (HTTP 403), and no tool there creates a release. It shipped **without the check by eye**: Desktop's drawing has been seen only as screenshots of the Svg in headless Chromium. Next: the user's check by eye in a real terminal and in Desktop, a new README screenshot, the open questions in Next Steps, then the choice between some of the upgrades and the subagent panel.
 - **Background documents** (their line references are as of v0.3.0, now stale):
   - `docs/superpowers/specs/2026-10-15-audit-and-next-steps.md`: the audit, the engine facts behind it, each bug with its fix, what is left out and why, assumptions to check by eye (section 6), the open `/model` bug (section 7), how to verify (section 8), and the guide for deciding what comes after the batch (section 9).
   - `docs/superpowers/plans/2026-10-15-audit-bug-fixes.md`: the ordered tasks (0–7) as planned.
@@ -13,7 +13,7 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
 
 ## Current State
 
-- **`main`:** v0.3.1, released (tag `v0.3.1`). Its history is linear: 0.3.1's commits sit on it one per task, as on the branch.
+- **`main`:** v0.3.1. The tag `v0.3.1` exists once the release form is published; check https://github.com/Krs7N/context-meter/releases. Its history is linear: 0.3.1's commits sit on it one per task, as on the branch.
 - **Branch `fix/audit-bugs`:** merged into `main` (same commit). Start the next batch on a new branch from `main`.
 - **Tests:** `claude plugin test context-meter` gives **55 pass, 0 fail**. `claude plugin validate context-meter` passes with the one old warning (no marketplace description). `tsc` 5.6.3 is clean.
 - **Type-check without `.claude-plugin/types/`:** a tsconfig kept outside the repo, `include` = the plugin-authoring skill's `types/claude-code.d.ts` plus the repo's `hooks`, `types`, `tests` (compilerOptions from that file's header), then `npx -y -p typescript@5.6.3 tsc -p <that tsconfig>`.
@@ -59,7 +59,7 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
 
   Not reproduced, so no code change: a reading answered after `/clear` landing on the fresh meter; the engine abandons the old conversation's dispatches, and a guard test pins that. The 39 low and trivial findings wait for the user's pick, in `docs/superpowers/audits/2026-10-15-open-findings.md`. Each comes from one auditor, unverified.
 - **CLAUDE.md** added (commands, architecture, engine rules, Desktop notes, preferences).
-- **2026-10-15, release 0.3.1:** at the user's word, `fix/audit-bugs` fast-forwarded into `main` and tagged `v0.3.1` (a lightweight tag, like `v0.3.0`). Release notes: "Everything since **0.3.0**." and the CHANGELOG's 0.3.1 section, in v0.3.0's format.
+- **2026-10-15, release 0.3.1:** at the user's word, `fix/audit-bugs` fast-forwarded into `main`. The tag push was refused (Failed Attempts), so the release form creates `v0.3.1` on `main`'s last commit, which is where `v0.3.0` sits too. Release notes: "Everything since **0.3.0**." and the CHANGELOG's 0.3.1 section, in v0.3.0's format.
 - **Two tests corrected (they could not pass as written):** the session clock test advances one more 0.7 s frame (the band redraws on Clawd's frames; the last one before 12:00 lands at 11:59.7). The `/clear` and `/resume` tests asserted "eyes open" and then "eyes shut" exactly one blink period apart, which never holds while the timer runs, and after a turn end, whose measure restarts the timer anyway; they now watch one blink period before the next turn ends, and a stopped timer fails them (checked with a mutant).
 
 ## Failed Attempts
@@ -78,11 +78,11 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
 - **Seeing the mod in a cloud session:** not installed there (user-scope plugins do not travel), and the band does not draw in cloud sessions per the docs. Use a local terminal.
 - **`claude plugin test` writing `.claude-plugin/types/`:** it does not; only loading the mod in a session does. Type-check with the tsconfig outside the repo (Current State).
 - **Multi-agent workflows for the audit and its fixes:** slow when run side by side, and the user stopped them. Work through findings one at a time instead.
-- **Creating the GitHub Release from a cloud session:** the GitHub tools there only read releases, and `gh` is not available. The tag can be pushed; the release page is published from `https://github.com/Krs7N/context-meter/releases/new?tag=vX.Y.Z`.
+- **Tagging and releasing from a cloud session:** the git proxy refused `git push origin v0.3.1` with HTTP 403 while branch pushes went through; the GitHub tools there only read releases, and `gh` is not available. Push the branches, then publish `https://github.com/Krs7N/context-meter/releases/new?tag=vX.Y.Z&target=main`, which creates the tag.
 
 ## Next Steps
 
-1. **Publish the GitHub Release** for `v0.3.1` if https://github.com/Krs7N/context-meter/releases does not list it yet: title `v0.3.1`, notes "Everything since **0.3.0**." and the CHANGELOG's 0.3.1 section.
+1. **Publish the GitHub Release** for `v0.3.1` if https://github.com/Krs7N/context-meter/releases does not list it yet; publishing creates the tag on `main`. Title `v0.3.1`, notes "Everything since **0.3.0**." and the CHANGELOG's 0.3.1 section.
 2. **`/model` first** (spec section 7): `/model sonnet` in a fresh local session, then again without `switchModelsOnFlag`. Until a switch works on the user's PC, the model-switch fixes cannot be seen there.
 3. **Check by eye** (spec sections 6 and 8), in a local terminal on `main`: `claude --plugin-dir .` (it replaces the installed copy; confirm `hooks module context-meter … loaded` in `claude --debug=hooks`), or the installed copy after `/plugin update context-meter`. Try a long turn (the meter moves per request, `this turn +…`), `/model` to a smaller window (window note, no spike, over-window warning), `/compact` (`~after`, `compacted … → …`), `/clear` and `/resume` (meter empties within a second, Clawd keeps animating), a short fullscreen terminal (one-line meter), a narrow one (whole pieces left out, nothing cut mid-figure), a model without effort (`– no effort`). In Desktop: Clawd as one picture in both themes, the band's text monospaced, and how the native buttons and runs of spaces look; ask the user for a screenshot. Where a spec section 6 assumption fails, apply its fallback with a test.
 4. **New README screenshot** (`docs/context-meter.png`, from the user's `Downloads/context-meter.png`): the current one shows 0.3.0.
