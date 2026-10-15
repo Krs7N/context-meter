@@ -576,6 +576,17 @@ describe('model switch', () => {
     await ui.unmount()
   })
 
+  test('the one-line meter colours a context bigger than the window', async ($, on) => {
+    on('session.usage', () => ({ value: usageIn(200_000, 350_000) }))
+    on('session.start', () => ({ cwd: '.' }))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 60)
+    const tokens = await ui.find({ type: 'Text', text: '350.0k' })
+    expect(tokens?.props.color).toBe('error')
+    await ui.unmount()
+  })
+
   test('the trend reads tokens, so a smaller window is no spike', async ($, on) => {
     let current = usageIn(1_000_000, 140_000)
     let name = 'claude-opus-5-5[1m]'
@@ -775,7 +786,8 @@ describe('readings', () => {
     await $.session.start(START)
     const ui = await band($, 140)
     expect(await ui.find({ type: 'Text', text: /session 10m/ })).toBeDefined()
-    await clock.advance(2 * 60_000)
+    // the band redraws on Clawd's frames, every 0.7 s: one more frame lands past the minute
+    await clock.advance(2 * 60_000 + 700)
     expect(await ui.find({ type: 'Text', text: /session 12m/ })).toBeDefined()
     await ui.unmount()
   })

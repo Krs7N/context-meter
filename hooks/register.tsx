@@ -916,6 +916,8 @@ export const register: Register = on => {
       read($, isModelPickerOpen),
     ])
     if (s === null) return next(e)
+    // the clock, not the reading's time, so the session's length runs between readings
+    const now = await $.clock.now().catch(() => s.at)
 
     const { Box, Text, Button } = $.ui.resolve(e)
     const isWorking = e.props.isWorking
@@ -928,7 +930,21 @@ export const register: Register = on => {
     const percent = Math.round(shown('percent', s.percent ?? 0))
     const compactPercent = s.compactAt !== undefined && s.window > 0 ? (s.compactAt / s.window) * 100 : undefined
     const fill = fillColor(percent, compactPercent)
-    const isCompact = columns < 72
+    // The engine caps the percent at 100: a context bigger than the window (after a switch
+    // to a smaller one) is told apart by its tokens.
+    const over = s.tokens !== undefined && s.window > 0 && s.tokens > s.window ? s.tokens - s.window : undefined
+
+    const idleTicks = tick - awake
+    const isAsleep = !isWorking && idleTicks >= SLEEP_AFTER_TICKS
+    const isBlinking = !isAsleep && tick % BLINK_EVERY === BLINK_EVERY - 1
+    const typing = isWorking ? tick : undefined
+    const zzz = CLAWD.zzz[Math.floor((idleTicks - SLEEP_AFTER_TICKS) / 2) % CLAWD.zzz.length]
+    const clawd = clawdRows({ outfit: outfitFor(eff), isShut: isAsleep || isBlinking, typing, zzz: isAsleep ? zzz : undefined })
+    const hasCategories = isDetailed && s.categories.length > 0
+    // The full band is as tall as Clawd or the stats, plus its border; a slot that cannot
+    // hold it (a short fullscreen terminal) gets the one-line meter instead of a scrolling band.
+    const fullRows = Math.max(clawd.length, 3 + (hasCategories ? 1 : 0)) + 2
+    const isCompact = columns < 72 || fullRows > e.props.maxRows
     const badge = effortBadge(eff)
     const modelText = `◇ ${modelLabel(modelName ?? s.model)}`
     const badgeWidth = (badge ? [...badge.text].length : 8) + 3 + [...modelText].length + 4
@@ -977,7 +993,11 @@ export const register: Register = on => {
             <Text dimColor>waiting for the first reply</Text>
           ) : (
             <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
-              <Text bold={hl('tokens')} color={hl('tokens') ? HL_COLOR : undefined} dimColor={!hl('tokens')}>
+              <Text
+                bold={over !== undefined || hl('tokens')}
+                color={over !== undefined ? 'error' : hl('tokens') ? HL_COLOR : undefined}
+                dimColor={over === undefined && !hl('tokens')}
+              >
                 {fmtTokens(shown('tokens', s.tokens))}
               </Text>
               <Text dimColor>{` / ${fmtTokens(s.window)} tokens`}</Text>
@@ -1089,11 +1109,16 @@ export const register: Register = on => {
 
     const headroom = s.compactAt !== undefined && s.tokens !== undefined ? s.compactAt - s.tokens : undefined
     const line2: Seg[][] = []
+    // Bigger than the window: the next send compacts first, or with auto-compaction off it fails.
+    if (over !== undefined) {
+      const then = s.isAutoCompact === false ? '/compact before sending' : 'next send compacts'
+      line2.push([{ text: `! ${fmtTokens(over)} over the ${fmtTokens(s.window)} window: ${then}`, color: 'error' }])
+    }
     // A new window (a model switch) moved the percent, not this turn: say so while it is fresh.
     if (hl('window') && s.windowFrom !== undefined) {
       line2.push([{ text: `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`, hl: true }])
     }
-    if (s.compactAt !== undefined) {
+    if (s.compactAt !== undefined && over === undefined) {
       // "┊ auto-compact at 167.0k (83.0k left)" — the same ┊ as the bar's compaction mark
       const seg: Seg[] = [{ text: `┊ auto-compact at ${fmtTokens(s.compactAt)}` }]
       if (headroom !== undefined) {
@@ -1122,7 +1147,7 @@ export const register: Register = on => {
     }
     if (trendTokens.length > 1) line2.push([{ text: trendText(trendTokens, s.window) }])
 
-    const line3: Seg[][] = [[{ text: `session ${duration(s.at - s.startedAt)}` }]]
+    const line3: Seg[][] = [[{ text: `session ${duration(now - s.startedAt)}` }]]
     if (s.usd !== undefined) line3.push([{ text: `$${shown('usd', s.usd).toFixed(2)}`, hl: hl('usd') }])
     for (const l of s.limits) {
       const key = `limit:${l.kind}`
@@ -1146,26 +1171,18 @@ export const register: Register = on => {
       </Box>
     )
 
-    const idleTicks = tick - awake
-    const isAsleep = !isWorking && idleTicks >= SLEEP_AFTER_TICKS
-    const isBlinking = !isAsleep && tick % BLINK_EVERY === BLINK_EVERY - 1
-    const typing = isWorking ? tick : undefined
-    const zzz = CLAWD.zzz[Math.floor((idleTicks - SLEEP_AFTER_TICKS) / 2) % CLAWD.zzz.length]
-
     return (
       <Box key="context-meter" borderStyle="round" borderColor="claude" paddingX={1} flexDirection="row" gap={2}>
         <Box key="clawd" flexDirection="column" flexShrink={0}>
-          {clawdRows({ outfit: outfitFor(eff), isShut: isAsleep || isBlinking, typing, zzz: isAsleep ? zzz : undefined }).map(
-            (row, r) => (
-              <Box key={`clawd${r}`} flexDirection="row">
-                {row.map((p, i) => (
-                  <Text key={`c${r}-${i}`} color={p.color} backgroundColor={p.bg} bold={p.bold}>
-                    {p.text}
-                  </Text>
-                ))}
-              </Box>
-            ),
-          )}
+          {clawd.map((row, r) => (
+            <Box key={`clawd${r}`} flexDirection="row">
+              {row.map((p, i) => (
+                <Text key={`c${r}-${i}`} color={p.color} backgroundColor={p.bg} bold={p.bold}>
+                  {p.text}
+                </Text>
+              ))}
+            </Box>
+          ))}
         </Box>
         <Box key="stats" flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
           {meter}
@@ -1183,7 +1200,7 @@ export const register: Register = on => {
               />
             </Box>
           </Box>
-          {isDetailed && s.categories.length > 0 ? (
+          {hasCategories ? (
             <Text key="categories" color="subtle">
               {s.categories.map(c => `${c.name} ${fmtTokens(c.tokens)}`).join(' · ')}
             </Text>
