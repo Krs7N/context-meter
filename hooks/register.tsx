@@ -410,6 +410,71 @@ type Seg = { text: string; hl?: boolean; color?: string }
 
 const isPlain = (seg: Seg) => !seg.hl && seg.color === undefined
 
+/** Cells a text takes: one per character (the band draws no wide ones). */
+const cellsOf = (text: string) => [...text].length
+
+/**
+ * A group of a stats row, how much it matters (the lowest rank goes first) and, for some, a
+ * shorter form that keeps its main figure.
+ */
+export type Group = { segs: Seg[]; rank: number; short?: Seg[] }
+
+/**
+ * The groups that fit `room` cells joined by ` · `, in their order. While they do not fit,
+ * the short forms are taken first, then the least important group is left out (the lowest
+ * rank; of equal ranks, the later one), so a figure is shown whole or not at all, never cut
+ * at the row's edge.
+ */
+export function fitGroups(groups: readonly Group[], room: number): Seg[][] {
+  const kept = groups.map(g => ({ ...g }))
+  const width = () =>
+    kept.reduce((n, g, i) => n + (i > 0 ? 3 : 0) + g.segs.reduce((m, seg) => m + cellsOf(seg.text), 0), 0)
+  // the least important of `among`: the lowest rank, of equal ranks the later one
+  const leastOf = (among: readonly typeof kept[number][]) =>
+    among.reduce<typeof kept[number] | undefined>((least, g) => (least === undefined || g.rank <= least.rank ? g : least), undefined)
+  while (width() > room) {
+    const g = leastOf(kept.filter(k => k.short !== undefined))
+    if (g === undefined || g.short === undefined) break
+    g.segs = g.short
+    g.short = undefined
+  }
+  while (kept.length > 0 && width() > room) {
+    const g = leastOf(kept)
+    kept.splice(g === undefined ? 0 : kept.indexOf(g), 1)
+  }
+  return kept.map(g => g.segs)
+}
+
+const WAITING = 'waiting for the first reply'
+const METER_LABEL = 'Context '
+const PERCENT_CELLS = 7
+const MIN_BAR = 10
+const MAX_BAR = 40
+
+/** The forms of the meter row's tokens piece, richest first: `84.0k / 200.0k tokens`, `84.0k / 200.0k`, `84.0k`. */
+export type TokensForm = 'full' | 'short' | 'bare' | 'none'
+export type MeterPlan = { hasLabel: boolean; tokens: TokensForm; bar: number }
+
+/**
+ * How the meter row fits `room` cells, given the cells each tokens form takes: the richest
+ * row with a bar of at least MIN_BAR, leaving out whole pieces in turn (the word "tokens",
+ * the "Context" label, the window, the tokens). Failing all, the bar and the percent alone.
+ */
+export function planMeter(room: number, tokensCells: (form: TokensForm) => number): MeterPlan {
+  const forms = [
+    [true, 'full'],
+    [true, 'short'],
+    [false, 'short'],
+    [false, 'bare'],
+    [false, 'none'],
+  ] as const
+  for (const [hasLabel, tokens] of forms) {
+    const rest = room - (hasLabel ? cellsOf(METER_LABEL) : 0) - PERCENT_CELLS - tokensCells(tokens)
+    if (rest >= MIN_BAR) return { hasLabel, tokens, bar: Math.min(MAX_BAR, rest) }
+  }
+  return { hasLabel: false, tokens: 'none', bar: Math.max(0, Math.min(MAX_BAR, room - PERCENT_CELLS)) }
+}
+
 /** Groups joined by ` · `, adjacent plain pieces merged so the row stays few Texts. */
 function joinSegs(groups: Seg[][]): Seg[] {
   const out: Seg[] = []
@@ -1193,17 +1258,57 @@ export const register: Register = on => {
     // An open picker column is as tall as its badge and choices.
     const pickerRows = 1 + Math.max(above.length + below.length, mAbove.length + mBelow.length)
 
-    // The full band is as tall as Clawd, the stats or an open picker, plus its border; a slot
-    // that cannot hold it (a short fullscreen terminal) gets the one-line meter instead of a
-    // scrolling band. Where even a picker column does not fit, its choices go in a row.
+    // What the picker columns draw, measured: each column is as wide as its widest entry (the
+    // badge and its ▾, or an open choice), with a gap of 2 between the two columns.
+    const badge = effortBadge(eff)
+    const effortBadgeText = badge ? badge.text : 'effort ?'
+    const modelText = `◇ ${modelLabel(modelName ?? s.model)}`
+    const effortLook = (choice: (typeof EFFORT_CHOICES)[number]) => {
+      const isUltraOff = choice === 'ultracode' && eff.isUltra
+      // Options are plain text: the badge's inverse colors need its background, so max is drawn in `error`.
+      const look = isUltraOff
+        ? { text: '✦ ultracode off', color: 'subtle' }
+        : choice === 'ultracode'
+          ? { text: '✦ ultracode', color: 'claude' }
+          : choice === 'max'
+            ? { text: '▲ max', color: 'error' }
+            : effortBadge({ level: choice, isUltra: false })
+      return {
+        text: `${look?.text.trim() ?? choice}  `,
+        color: look?.color,
+        dimColor: look?.dimColor,
+        args: isUltraOff ? 'ultracode off' : choice,
+      }
+    }
+    const modelChoiceText = (choice: ModelChoice) => `◇ ${modelLabel(choice)}  `
+    const pickerCells =
+      Math.max(cellsOf(modelText) + 2, ...[...mAbove, ...mBelow].map(c => cellsOf(modelChoiceText(c)))) +
+      2 +
+      Math.max(cellsOf(effortBadgeText) + 2, ...[...above, ...below].map(c => cellsOf(effortLook(c).text)))
+
+    // The meter row's tokens piece in each form, in cells: a margin, the tokens (6 at most, so
+    // the row keeps its width while they count up) or the compaction's ~after, then the window.
+    const windowText = fmtTokens(s.window)
+    const tokensCells = (form: TokensForm) => {
+      if (form === 'none') return 0
+      if (s.tokens === undefined && compactedTo === undefined) return form === 'full' ? cellsOf(WAITING) : 0
+      const suffix = form === 'full' ? ` / ${windowText} tokens` : form === 'short' ? ` / ${windowText}` : ''
+      return 1 + (s.tokens === undefined ? 1 : 0) + 6 + cellsOf(suffix)
+    }
+
+    // The full band is as tall as Clawd, the stats or an open picker, plus its border. Its stats
+    // column is the band less the border and padding (4), Clawd (13), two gaps (4) and the
+    // pickers. A slot that cannot hold the band (a short fullscreen terminal), or a stats column
+    // too narrow for the bar, the percent and the tokens, gets the one-line meter instead. Where
+    // even a picker column does not fit the slot, its choices go in a row.
     const fullRows = Math.max(clawd.length, 3 + (hasCategories ? 1 : 0), pickerRows) + 2
-    const isCompact = columns < 72 || fullRows > e.props.maxRows
+    const statsCells = columns - 21 - pickerCells
+    const fullPlan = planMeter(statsCells, tokensCells)
+    const isCompact =
+      columns < 72 || fullPlan.tokens === 'none' || fullPlan.bar < MIN_BAR || fullRows > e.props.maxRows
     const isPickerRow = pickerRows > e.props.maxRows
     const pickerDirection = isPickerRow ? 'row' : 'column'
-    const badge = effortBadge(eff)
-    const modelText = `◇ ${modelLabel(modelName ?? s.model)}`
-    const badgeWidth = (badge ? [...badge.text].length : 8) + 3 + [...modelText].length + 4
-    const width = Math.max(10, Math.min(40, columns - (isCompact ? 42 : 60) - badgeWidth))
+    const plan = isCompact ? planMeter(columns - pickerCells, tokensCells) : fullPlan
 
     // A changed number stays highlighted for HIGHLIGHT_TICKS ticks (about 10 s).
     const isFresh = tick - s.changedTick < HIGHLIGHT_TICKS
@@ -1212,7 +1317,7 @@ export const register: Register = on => {
       percent: shown('percent', fillPercent),
       prevPercent: hl('percent') ? s.prevPercent : undefined,
       compactFraction: s.compactAt !== undefined && s.window > 0 ? s.compactAt / s.window : undefined,
-      width,
+      width: plan.bar,
     })
     const arrow =
       hl('percent') && s.prevPercent !== undefined ? ((s.percent ?? 0) > s.prevPercent ? '▲' : '▼') : ' '
@@ -1226,62 +1331,63 @@ export const register: Register = on => {
             ? { color: 'warning', bold: true }
             : { dimColor: true }
 
-    // Every piece keeps its own width (flexShrink 0) and the row clips what does
-    // not fit, so a number that grows while counting can never draw over its neighbour.
+    // The pieces the plan keeps, each whole: the window after the tokens, in its form.
+    const windowSuffix = plan.tokens === 'full' ? ` / ${windowText} tokens` : plan.tokens === 'short' ? ` / ${windowText}` : ''
+    const tokensPiece =
+      plan.tokens === 'none' ? null : s.tokens === undefined && compactedTo !== undefined ? (
+        <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
+          <Text dimColor>{`~${fmtTokens(compactedTo)}`}</Text>
+          {windowSuffix ? <Text dimColor>{windowSuffix}</Text> : null}
+        </Box>
+      ) : s.tokens === undefined ? (
+        plan.tokens === 'full' ? (
+          <Text dimColor>{WAITING}</Text>
+        ) : null
+      ) : (
+        <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
+          <Text
+            bold={over !== undefined || hl('tokens')}
+            color={over !== undefined ? 'error' : hl('tokens') ? HL_COLOR : undefined}
+            dimColor={over === undefined && !hl('tokens')}
+          >
+            {fmtTokens(shown('tokens', s.tokens))}
+          </Text>
+          {windowSuffix ? <Text dimColor>{windowSuffix}</Text> : null}
+        </Box>
+      )
+
+    // Every piece keeps its own width (flexShrink 0); the plan leaves out what does not fit,
+    // and the row clips only as a guard, so a number that grows while counting never draws
+    // over its neighbour.
     const meter = (
       <Box key="meter" flexDirection="row" justifyContent="space-between" overflow="hidden">
         <Box key="fill" flexDirection="row" flexShrink={0}>
-          <Text bold color="claude">
-            {'Context '}
-          </Text>
+          {plan.hasLabel ? (
+            <Text bold color="claude">
+              {METER_LABEL}
+            </Text>
+          ) : null}
           {runs.map((r, i) => (
             <Text key={`run${i}`} {...runStyle(r.kind)}>
               {r.text}
             </Text>
           ))}
-          <Box key="percent" width={7} flexShrink={0}>
+          <Box key="percent" width={PERCENT_CELLS} flexShrink={0}>
             <Text bold color={hl('percent') ? HL_COLOR : fill}>
               {` ${percent}%${arrow}`}
             </Text>
           </Box>
-          {s.tokens === undefined && compactedTo !== undefined ? (
-            <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
-              <Text dimColor>{`~${fmtTokens(compactedTo)}`}</Text>
-              <Text dimColor>{` / ${fmtTokens(s.window)} tokens`}</Text>
-            </Box>
-          ) : s.tokens === undefined ? (
-            <Text dimColor>waiting for the first reply</Text>
-          ) : (
-            <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
-              <Text
-                bold={over !== undefined || hl('tokens')}
-                color={over !== undefined ? 'error' : hl('tokens') ? HL_COLOR : undefined}
-                dimColor={over === undefined && !hl('tokens')}
-              >
-                {fmtTokens(shown('tokens', s.tokens))}
-              </Text>
-              <Text dimColor>{` / ${fmtTokens(s.window)} tokens`}</Text>
-            </Box>
-          )}
+          {tokensPiece}
         </Box>
       </Box>
     )
 
     const choiceButton = (choice: (typeof EFFORT_CHOICES)[number]) => {
-      const isUltraOff = choice === 'ultracode' && eff.isUltra
-      // Options are plain text: the badge's inverse colors need its background, so max is drawn in `error`.
-      const look = isUltraOff
-        ? { text: '✦ ultracode off', color: 'subtle' }
-        : choice === 'ultracode'
-          ? { text: '✦ ultracode', color: 'claude' }
-          : choice === 'max'
-            ? { text: '▲ max', color: 'error' }
-            : effortBadge({ level: choice, isUltra: false })
-      const args = isUltraOff ? 'ultracode off' : choice
+      const look = effortLook(choice)
       return (
-        <Button key={`pick-${choice}`} plain label={args} onPress={() => pickEffort($, args)}>
-          <Text color={look?.color} dimColor={look?.dimColor}>
-            {`${look?.text.trim() ?? choice}  `}
+        <Button key={`pick-${choice}`} plain label={look.args} onPress={() => pickEffort($, look.args)}>
+          <Text color={look.color} dimColor={look.dimColor}>
+            {look.text}
           </Text>
         </Button>
       )
@@ -1304,7 +1410,7 @@ export const register: Register = on => {
             bold={badge?.bold}
             dimColor={badge ? badge.dimColor : true}
           >
-            {badge ? badge.text : 'effort ?'}
+            {effortBadgeText}
           </Text>
           <Text dimColor>{isPicking ? ' ▴' : ' ▾'}</Text>
         </Button>
@@ -1314,7 +1420,7 @@ export const register: Register = on => {
 
     const modelButton = (choice: ModelChoice) => (
       <Button key={`model-${choice}`} plain label={choice} onPress={() => pickModel($, choice)}>
-        <Text color="text">{`◇ ${modelLabel(choice)}  `}</Text>
+        <Text color="text">{modelChoiceText(choice)}</Text>
       </Button>
     )
     const modelColumn = (
@@ -1358,28 +1464,34 @@ export const register: Register = on => {
       )
     }
 
+    // Rows 2 and 3 keep what fits whole, leaving out the least important groups first (the
+    // lowest rank): in row 2 the trend, then the turn's growth; in row 3 the session's length,
+    // then the rate limits, the cost last.
     const headroom = s.compactAt !== undefined && s.tokens !== undefined ? s.compactAt - s.tokens : undefined
-    const line2: Seg[][] = []
+    const line2: Group[] = []
     // Bigger than the window: the next send compacts first, or with auto-compaction off it fails.
     if (over !== undefined) {
       const then = s.isAutoCompact === false ? '/compact before sending' : 'next send compacts'
-      line2.push([{ text: `! ${fmtTokens(over)} over the ${fmtTokens(s.window)} window: ${then}`, color: 'error' }])
+      line2.push({
+        segs: [{ text: `! ${fmtTokens(over)} over the ${fmtTokens(s.window)} window: ${then}`, color: 'error' }],
+        rank: 5,
+      })
     }
     // A new window (a model switch) moved the percent, not this turn: say so while it is fresh.
     if (hl('window') && s.windowFrom !== undefined) {
-      line2.push([{ text: `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`, hl: true }])
+      line2.push({ segs: [{ text: `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`, hl: true }], rank: 4 })
     }
     if (s.compactAt !== undefined && over === undefined) {
       // "┊ auto-compact at 167.0k (83.0k left)" — the same ┊ as the bar's compaction mark
       const seg: Seg[] = [{ text: `┊ auto-compact at ${fmtTokens(s.compactAt)}` }]
+      let short: Seg[] | undefined
       if (headroom !== undefined) {
-        seg.push(
-          { text: ' (' },
-          { text: fmtTokens(shown('headroom', Math.max(0, headroom))), hl: hl('headroom') },
-          { text: ' left)' },
-        )
+        const left: Seg = { text: fmtTokens(shown('headroom', Math.max(0, headroom))), hl: hl('headroom') }
+        seg.push({ text: ' (' }, left, { text: ' left)' })
+        // short: "┊ 83.0k left"
+        short = [{ text: '┊ ' }, left, { text: ' left' }]
       }
-      line2.push(seg)
+      line2.push({ segs: seg, rank: 3, short })
     }
     // While Claude works, the running turn's growth so far; between turns, the last turn's.
     const turnGrowth =
@@ -1389,27 +1501,28 @@ export const register: Register = on => {
     // the sign is the final value's: a count-up passes through 0
     const signed = (n: number, final = n) => `${final > 0 ? '+' : '−'}${fmtTokens(Math.abs(n))}`
     if (turnGrowth !== 0) {
-      line2.push([{ text: 'this turn ' }, { text: signed(turnGrowth), hl: hl('tokens') }])
+      line2.push({ segs: [{ text: 'this turn ' }, { text: signed(turnGrowth), hl: hl('tokens') }], rank: 2 })
     } else if (s.compaction !== undefined) {
       // until a turn end measures a real turn again, the compaction is the news
-      line2.push([{ text: compactionText(s.compaction) }])
+      line2.push({ segs: [{ text: compactionText(s.compaction) }], rank: 2 })
     } else if (s.lastDelta !== undefined && s.lastDelta !== 0) {
-      line2.push([
-        { text: 'last turn ' },
-        { text: signed(shown('delta', s.lastDelta), s.lastDelta), hl: hl('delta') },
-      ])
+      line2.push({
+        segs: [{ text: 'last turn ' }, { text: signed(shown('delta', s.lastDelta), s.lastDelta), hl: hl('delta') }],
+        rank: 2,
+      })
     }
-    if (trendTokens.length > 1) line2.push([{ text: trendText(trendTokens, s.window) }])
+    if (trendTokens.length > 1) line2.push({ segs: [{ text: trendText(trendTokens, s.window) }], rank: 1 })
 
-    const line3: Seg[][] = [[{ text: `session ${duration(now - s.startedAt)}` }]]
-    if (s.usd !== undefined) line3.push([{ text: `$${shown('usd', s.usd).toFixed(2)}`, hl: hl('usd') }])
-    for (const l of s.limits) {
+    const line3: Group[] = [{ segs: [{ text: `session ${duration(now - s.startedAt)}` }], rank: 1 }]
+    if (s.usd !== undefined) line3.push({ segs: [{ text: `$${shown('usd', s.usd).toFixed(2)}`, hl: hl('usd') }], rank: 4 })
+    s.limits.forEach((l, i) => {
       const key = `limit:${l.kind}`
-      line3.push([
-        { text: `${LIMIT_NAMES[l.kind] ?? l.kind} ` },
-        { text: `${Math.round(shown(key, l.percentUsed))}%`, hl: hl(key) },
-      ])
-    }
+      line3.push({
+        segs: [{ text: `${LIMIT_NAMES[l.kind] ?? l.kind} ` }, { text: `${Math.round(shown(key, l.percentUsed))}%`, hl: hl(key) }],
+        rank: i === 0 ? 3 : 2,
+      })
+    })
+    const detailsLabel = isDetailed ? 'hide' : 'details'
 
     // Pieces keep their width; the row clips at its edge instead of squeezing them onto each other.
     const row = (key: string, groups: Seg[][]) => (
@@ -1447,14 +1560,14 @@ export const register: Register = on => {
         </Box>
         <Box key="stats" flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
           {meter}
-          {row('line2', line2)}
+          {row('line2', fitGroups(line2, statsCells))}
           <Box key="line3" flexDirection="row" overflow="hidden">
-            {row('line3segs', line3)}
+            {row('line3segs', fitGroups(line3, statsCells - cellsOf(` · ${detailsLabel}`)))}
             <Box key="details-box" flexShrink={0}>
               <Text dimColor>{' · '}</Text>
               <Button
                 key="details"
-                label={isDetailed ? 'hide' : 'details'}
+                label={detailsLabel}
                 dimColor
                 plain
                 onPress={() => update($, showDetails, v => !v)}

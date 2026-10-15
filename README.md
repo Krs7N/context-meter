@@ -54,7 +54,11 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - **Count-up:** a changed number does not jump to its new value. It counts there from the old one over 6 s with an ease-out (`TWEEN_STEPS` × `TWEEN_MS`), and the bar grows with it. A newer reading restarts the count.
 - **Trend:** the tokens at the last 8 turn ends, scaled to the values shown, then first→last as percents of the window shown now, so a switch to a smaller window draws no spike.
 - **Over the window:** the engine caps the percent at 100, so a context bigger than the window (after a switch to a smaller model) shows as red tokens and the warning at the start of row 2.
-- Below 72 terminal columns, or when the full band is taller than the room above the prompt (`maxRows`, a short fullscreen terminal), only row 1 and the two badges are drawn, without frame and mascot.
+- Below 72 columns, when the badges leave too little room beside Clawd for the bar, the percent and the tokens, or when the full band (an open picker included) is taller than the room above the prompt (`maxRows`, a short fullscreen terminal), only row 1 and the two badges are drawn, without frame and mascot. Where even an open picker column is taller than that room, its choices are drawn in a row instead of the meter until it closes.
+- Nothing is cut mid-figure. Where a row lacks room it leaves out whole pieces:
+  - the meter row drops the word `tokens`, then `Context`, then the window, then the token count, and the bar shrinks last;
+  - row 2 shortens `┊ auto-compact at 167.0k (83.0k left)` to `┊ 83.0k left`, then leaves out the trend, then the turn's growth;
+  - row 3 leaves out the session's length first, then the rate limits, the cost last.
 - Before the first reply of a session (or right after `/clear`) the token count shows "waiting for the first reply". Right after a compaction it shows what the compaction left, `~31.0k / 200.0k tokens`, until the next reply.
 - `/clear` and `/resume` start the meter over: no growth or trend is measured against the conversation before.
 - In Claude Code Desktop the band's text is set in the monospaced face and Clawd is drawn as one picture (`clawdSvg`), so he looks as he does in the terminal; the badges and picker options are Desktop's own buttons.
@@ -158,7 +162,7 @@ the plain figures, which cost nothing.
 
 - **Change the colors** — the thresholds in `fillColor` and the `color="claude"` props in the `ui.render` hook. Any theme key works (`success`, `warning`, `error`, `subtle`, `permission`, …).
 - **Bar width** — `const width = Math.max(10, Math.min(40, …))` in the render hook.
-- **One-line cut-off** — `const isCompact = columns < 72 || fullRows > e.props.maxRows`.
+- **One-line cut-off** — `isCompact` in the render hook (`planMeter` decides what the meter row keeps, `fitGroups` what rows 2 and 3 keep).
 - **Trend length** — `TREND_LEN` (shown), `TREND_KEEP` (stored).
 - **Add a metric** — add a field to `Snapshot` in `types/index.d.ts`, fill it in `toSnapshot`, print it in `line2` / `line3`.
 - **More categories in details** — `.slice(0, 5)` in `toSnapshot`.
