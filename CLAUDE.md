@@ -83,5 +83,6 @@ Helpers in the test file:
 ## Working with the user
 
 - Replies: terse.
+- The band's pieces stay: the meter row's `Context` and `… / … tokens`, row 2's whole `┊ auto-compact at … (… left)` and row 3's `session …` always show. Never drop or shorten them (the user's call); only trailing figures may be left out, whole.
 - Visuals: one tweak at a time, so they can judge each change.
 - Pushing: the repo is public, so ask before pushing.

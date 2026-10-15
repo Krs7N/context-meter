@@ -48,7 +48,7 @@ Keep developing **context-meter**, a Claude Code mod (hooks-module plugin) that 
   1. turn ends now come from `turn.complete` (a mid-turn rate-limit measure had been taken for a turn end);
   2. `/compact` no longer reads usage before the engine installs the compaction;
   3. an open picker counts in the band's height (choices in a row in a very short slot);
-  4. nothing is cut mid-figure (`planMeter`, `fitGroups`);
+  4. rows 2 and 3 leave out their last figures whole instead of cutting them (`fitGroups`). A first version also dropped or shortened the word `tokens`, the auto-compact point and the session's length; the user wants those always shown, so they are again (rank `Infinity`) and the meter row never drops a piece, only narrows its bar;
   5. a refused, capped or overridden effort shows what is in force, with a toast (wording from the 2.1.300 binary);
   6. the saved effort is found on 1M models and dated ids;
   7. no work where nothing draws (`isDrawn`, `session.attach`/`detach`);

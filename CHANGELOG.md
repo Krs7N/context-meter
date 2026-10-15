@@ -19,7 +19,7 @@
 - Less work per turn: the breakdown is read only when the fill moved, `/config` only until the effort is known, and nothing is awaited before a request is sent.
 - A turn's end is taken from the turn itself. A rate-limit window moving mid-turn no longer cuts the turn in two (a short `last turn`, an extra trend point).
 - An open picker counts in the band's height. A band it would make too tall becomes the one-line meter, and in a very short slot its choices are drawn in a row.
-- Nothing is cut mid-figure. The meter row and rows 2 and 3 leave out whole pieces where they lack room, least important first, and the auto-compact point shortens to `┊ 83.0k left`.
+- Where rows 2 and 3 lack room, their last figures are left out whole (the trend, then the turn's growth; the rate limits, then the cost) instead of being cut mid-number. The auto-compact point and the session's length always show, and the meter row's bar narrows before anything is cut.
 - An effort pick that `/effort` refuses, caps or overrides shows what is in force, and a toast quotes why. A refused ultracode no longer shows ULTRACODE and the top hat.
 - The saved effort is found on a 1M-context model and for dated model ids.
 - Where nothing draws the band (`claude -p`, the Agent SDK, VS Code), the mod does no work. It starts when Claude Code Desktop attaches.

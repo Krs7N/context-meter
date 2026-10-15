@@ -335,8 +335,8 @@ const drawn = (node: unknown): string =>
 const pickersWidth = async (ui: Awaited<ReturnType<typeof band>>) =>
   [...drawn(await ui.find({ key: 'model-col' }))].length + 2 + [...drawn(await ui.find({ key: 'effort-col' }))].length
 
-describe('nothing is cut mid-figure', () => {
-  test('the meter row fits its room at every width', async ($, on) => {
+describe('the band at every width', () => {
+  test('the meter row shows every piece; the bar takes the room it has', async ($, on) => {
     on('session.usage', () => ({
       value: usageIn(200_000, 84_000, breakdownOf({ window: 200_000, tokens: 84_000, compactAt: 167_000 })),
     }))
@@ -345,17 +345,20 @@ describe('nothing is cut mid-figure', () => {
     await $.session.start(START)
     for (const columns of [40, 50, 60, 71, 72, 76, 80, 90, 100, 120, 160]) {
       const ui = await band($, columns)
+      const meter = drawn(await ui.find({ key: 'fill' }))
+      expect(meter, `${columns} columns`).toMatch(/^Context [█▏▎▍▌▋▊▉░┊]+ 42% 84\.0k \/ 200\.0k tokens$/)
       // the full band: border and padding 4, Clawd 13, two gaps of 2; the one-line meter: the row less the pickers
       const isFull = (await ui.find({ key: 'stats' })) !== undefined
       const room = columns - (await pickersWidth(ui)) - (isFull ? 21 : 0)
-      const meter = drawn(await ui.find({ key: 'fill' }))
-      expect([...meter].length, `${columns} columns: "${meter}" in ${room} cells`).toBeLessThanOrEqual(room)
-      expect(meter).toMatch(/ 42% /)
+      // where the row fits with a bar of 10, it fits whole: the bar never pushes it past the edge
+      if (room >= [...meter].length - (meter.split(' ')[1]?.length ?? 0) + 10) {
+        expect([...meter].length, `${columns} columns: "${meter}" in ${room} cells`).toBeLessThanOrEqual(room)
+      }
       await ui.unmount()
     }
   })
 
-  test('rows 2 and 3 show each figure whole or not at all', async ($, on) => {
+  test('rows 2 and 3 always show the auto-compact point and the session; the rest goes whole', async ($, on) => {
     let tokens = 20_000
     const reading = (): SessionUsage => ({
       ...usageIn(200_000, tokens, breakdownOf({ window: 200_000, tokens, compactAt: 167_000 })),
@@ -377,16 +380,16 @@ describe('nothing is cut mid-figure', () => {
       await turnEnds($, reading())
     }
     await clock.advance(7000)
-    for (const columns of [80, 90, 100, 110, 118, 120, 127, 140, 200]) {
+    for (const columns of [72, 80, 90, 100, 110, 118, 120, 127, 140, 200]) {
       const ui = await band($, columns)
       const room = columns - (await pickersWidth(ui)) - 21
       const row2 = drawn(await ui.find({ key: 'line2' }))
       const row3 = drawn(await ui.find({ key: 'line3segs' }))
-      expect([...row2].length, `${columns} columns: "${row2}" in ${room} cells`).toBeLessThanOrEqual(room)
-      // where the auto-compact point does not fit whole, its headroom still shows
-      if (columns === 80) expect(row2).toMatch(/^┊ [\d.]+k left/)
-      // row 3 ends with " · details"
-      expect([...row3].length, `${columns} columns: "${row3}" in ${room - 10} cells`).toBeLessThanOrEqual(room - 10)
+      expect(row2, `${columns} columns`).toMatch(/^┊ auto-compact at 167\.0k \(75\.0k left\)/)
+      expect(row3, `${columns} columns`).toMatch(/^session 10m/)
+      // past the room, only the first figure alone (the row's edge cuts it, as it always did); never a cut last figure
+      if ([...row2].length > room) expect(row2, `${columns} columns`).not.toContain(' · ')
+      if ([...row3].length > room - 10) expect(row3, `${columns} columns`).not.toContain(' · ')
       await ui.unmount()
     }
     // with room enough, every figure shows

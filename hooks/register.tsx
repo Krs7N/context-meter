@@ -413,34 +413,26 @@ const isPlain = (seg: Seg) => !seg.hl && seg.color === undefined
 /** Cells a text takes: one per character (the band draws no wide ones). */
 const cellsOf = (text: string) => [...text].length
 
-/**
- * A group of a stats row, how much it matters (the lowest rank goes first) and, for some, a
- * shorter form that keeps its main figure.
- */
-export type Group = { segs: Seg[]; rank: number; short?: Seg[] }
+/** A group of a stats row and how much it matters: the lowest rank goes first; `Infinity` always shows. */
+export type Group = { segs: Seg[]; rank: number }
 
 /**
- * The groups that fit `room` cells joined by ` · `, in their order. While they do not fit,
- * the short forms are taken first, then the least important group is left out (the lowest
- * rank; of equal ranks, the later one), so a figure is shown whole or not at all, never cut
- * at the row's edge.
+ * The groups that fit `room` cells joined by ` · `, in their order. While they do not fit, the
+ * least important is left out whole (the lowest rank; of equal ranks, the later one), so the
+ * last figure is not cut mid-number. Groups ranked `Infinity` always show, as they always did:
+ * where they alone are wider than the room, the row's edge cuts them.
  */
 export function fitGroups(groups: readonly Group[], room: number): Seg[][] {
-  const kept = groups.map(g => ({ ...g }))
+  const kept = [...groups]
   const width = () =>
     kept.reduce((n, g, i) => n + (i > 0 ? 3 : 0) + g.segs.reduce((m, seg) => m + cellsOf(seg.text), 0), 0)
-  // the least important of `among`: the lowest rank, of equal ranks the later one
-  const leastOf = (among: readonly typeof kept[number][]) =>
-    among.reduce<typeof kept[number] | undefined>((least, g) => (least === undefined || g.rank <= least.rank ? g : least), undefined)
   while (width() > room) {
-    const g = leastOf(kept.filter(k => k.short !== undefined))
-    if (g === undefined || g.short === undefined) break
-    g.segs = g.short
-    g.short = undefined
-  }
-  while (kept.length > 0 && width() > room) {
-    const g = leastOf(kept)
-    kept.splice(g === undefined ? 0 : kept.indexOf(g), 1)
+    let drop = -1
+    kept.forEach((g, i) => {
+      if (g.rank !== Infinity && (drop < 0 || g.rank <= (kept[drop]?.rank ?? Infinity))) drop = i
+    })
+    if (drop < 0) break
+    kept.splice(drop, 1)
   }
   return kept.map(g => g.segs)
 }
@@ -450,30 +442,6 @@ const METER_LABEL = 'Context '
 const PERCENT_CELLS = 7
 const MIN_BAR = 10
 const MAX_BAR = 40
-
-/** The forms of the meter row's tokens piece, richest first: `84.0k / 200.0k tokens`, `84.0k / 200.0k`, `84.0k`. */
-export type TokensForm = 'full' | 'short' | 'bare' | 'none'
-export type MeterPlan = { hasLabel: boolean; tokens: TokensForm; bar: number }
-
-/**
- * How the meter row fits `room` cells, given the cells each tokens form takes: the richest
- * row with a bar of at least MIN_BAR, leaving out whole pieces in turn (the word "tokens",
- * the "Context" label, the window, the tokens). Failing all, the bar and the percent alone.
- */
-export function planMeter(room: number, tokensCells: (form: TokensForm) => number): MeterPlan {
-  const forms = [
-    [true, 'full'],
-    [true, 'short'],
-    [false, 'short'],
-    [false, 'bare'],
-    [false, 'none'],
-  ] as const
-  for (const [hasLabel, tokens] of forms) {
-    const rest = room - (hasLabel ? cellsOf(METER_LABEL) : 0) - PERCENT_CELLS - tokensCells(tokens)
-    if (rest >= MIN_BAR) return { hasLabel, tokens, bar: Math.min(MAX_BAR, rest) }
-  }
-  return { hasLabel: false, tokens: 'none', bar: Math.max(0, Math.min(MAX_BAR, room - PERCENT_CELLS)) }
-}
 
 /** Groups joined by ` · `, adjacent plain pieces merged so the row stays few Texts. */
 function joinSegs(groups: Seg[][]): Seg[] {
@@ -1387,29 +1355,28 @@ export const register: Register = on => {
       2 +
       Math.max(cellsOf(effortBadgeText) + 2, ...[...above, ...below].map(c => cellsOf(effortLook(c).text)))
 
-    // The meter row's tokens piece in each form, in cells: a margin, the tokens (6 at most, so
-    // the row keeps its width while they count up) or the compaction's ~after, then the window.
+    // The meter row's tokens piece in cells: a margin, the tokens (6 at most, so the row keeps
+    // its width while they count up) or the compaction's ~after, then the window and "tokens".
     const windowText = fmtTokens(s.window)
-    const tokensCells = (form: TokensForm) => {
-      if (form === 'none') return 0
-      if (s.tokens === undefined && compactedTo === undefined) return form === 'full' ? cellsOf(WAITING) : 0
-      const suffix = form === 'full' ? ` / ${windowText} tokens` : form === 'short' ? ` / ${windowText}` : ''
-      return 1 + (s.tokens === undefined ? 1 : 0) + 6 + cellsOf(suffix)
-    }
+    const tokensCells =
+      s.tokens === undefined && compactedTo === undefined
+        ? cellsOf(WAITING)
+        : 1 + (s.tokens === undefined ? 1 : 0) + 6 + cellsOf(` / ${windowText} tokens`)
 
     // The full band is as tall as Clawd, the stats or an open picker, plus its border. Its stats
     // column is the band less the border and padding (4), Clawd (13), two gaps (4) and the
-    // pickers. A slot that cannot hold the band (a short fullscreen terminal), or a stats column
-    // too narrow for the bar, the percent and the tokens, gets the one-line meter instead. Where
-    // even a picker column does not fit the slot, its choices go in a row.
+    // pickers. Below 72 columns, or in a slot that cannot hold the band (a short fullscreen
+    // terminal), the one-line meter instead; where even a picker column does not fit the slot,
+    // its choices go in a row.
     const fullRows = Math.max(clawd.length, 3 + (hasCategories ? 1 : 0), pickerRows) + 2
     const statsCells = columns - 21 - pickerCells
-    const fullPlan = planMeter(statsCells, tokensCells)
-    const isCompact =
-      columns < 72 || fullPlan.tokens === 'none' || fullPlan.bar < MIN_BAR || fullRows > e.props.maxRows
+    const isCompact = columns < 72 || fullRows > e.props.maxRows
     const isPickerRow = pickerRows > e.props.maxRows
     const pickerDirection = isPickerRow ? 'row' : 'column'
-    const plan = isCompact ? planMeter(columns - pickerCells, tokensCells) : fullPlan
+    // Every piece of the meter row always shows; the bar takes the room beside them, 10 to 40
+    // cells, and where even 10 do not fit, the row's edge cuts the end, as it always has.
+    const meterRoom = isCompact ? columns - pickerCells : statsCells
+    const barCells = Math.max(MIN_BAR, Math.min(MAX_BAR, meterRoom - cellsOf(METER_LABEL) - PERCENT_CELLS - tokensCells))
 
     // A changed number stays highlighted for HIGHLIGHT_TICKS ticks (about 10 s).
     const isFresh = tick - s.changedTick < HIGHLIGHT_TICKS
@@ -1418,7 +1385,7 @@ export const register: Register = on => {
       percent: shown('percent', fillPercent),
       prevPercent: hl('percent') ? s.prevPercent : undefined,
       compactFraction: s.compactAt !== undefined && s.window > 0 ? s.compactAt / s.window : undefined,
-      width: plan.bar,
+      width: barCells,
     })
     const arrow =
       hl('percent') && s.prevPercent !== undefined ? ((s.percent ?? 0) > s.prevPercent ? '▲' : '▼') : ' '
@@ -1432,18 +1399,15 @@ export const register: Register = on => {
             ? { color: 'warning', bold: true }
             : { dimColor: true }
 
-    // The pieces the plan keeps, each whole: the window after the tokens, in its form.
-    const windowSuffix = plan.tokens === 'full' ? ` / ${windowText} tokens` : plan.tokens === 'short' ? ` / ${windowText}` : ''
+    const windowSuffix = ` / ${windowText} tokens`
     const tokensPiece =
-      plan.tokens === 'none' ? null : s.tokens === undefined && compactedTo !== undefined ? (
+      s.tokens === undefined && compactedTo !== undefined ? (
         <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
           <Text dimColor>{`~${fmtTokens(compactedTo)}`}</Text>
-          {windowSuffix ? <Text dimColor>{windowSuffix}</Text> : null}
+          <Text dimColor>{windowSuffix}</Text>
         </Box>
       ) : s.tokens === undefined ? (
-        plan.tokens === 'full' ? (
-          <Text dimColor>{WAITING}</Text>
-        ) : null
+        <Text dimColor>{WAITING}</Text>
       ) : (
         <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
           <Text
@@ -1453,21 +1417,18 @@ export const register: Register = on => {
           >
             {fmtTokens(shown('tokens', s.tokens))}
           </Text>
-          {windowSuffix ? <Text dimColor>{windowSuffix}</Text> : null}
+          <Text dimColor>{windowSuffix}</Text>
         </Box>
       )
 
-    // Every piece keeps its own width (flexShrink 0); the plan leaves out what does not fit,
-    // and the row clips only as a guard, so a number that grows while counting never draws
-    // over its neighbour.
+    // Every piece keeps its own width (flexShrink 0) and the row clips what does not fit, so a
+    // number that grows while counting can never draw over its neighbour.
     const meter = (
       <Box key="meter" flexDirection="row" justifyContent="space-between" overflow="hidden">
         <Box key="fill" flexDirection="row" flexShrink={0}>
-          {plan.hasLabel ? (
-            <Text bold color="claude">
-              {METER_LABEL}
-            </Text>
-          ) : null}
+          <Text bold color="claude">
+            {METER_LABEL}
+          </Text>
           {runs.map((r, i) => (
             <Text key={`run${i}`} {...runStyle(r.kind)}>
               {r.text}
@@ -1565,9 +1526,10 @@ export const register: Register = on => {
       )
     }
 
-    // Rows 2 and 3 keep what fits whole, leaving out the least important groups first (the
-    // lowest rank): in row 2 the trend, then the turn's growth; in row 3 the session's length,
-    // then the rate limits, the cost last.
+    // Rows 2 and 3 always show their first figures whole: the over-window warning or the
+    // auto-compact point, and the session's length. Where the rest does not fit, the last
+    // groups are left out whole (the lowest rank first): in row 2 the trend, then the turn's
+    // growth; in row 3 the rate limits, then the cost.
     const headroom = s.compactAt !== undefined && s.tokens !== undefined ? s.compactAt - s.tokens : undefined
     const line2: Group[] = []
     // Bigger than the window: the next send compacts first, or with auto-compaction off it fails.
@@ -1575,24 +1537,24 @@ export const register: Register = on => {
       const then = s.isAutoCompact === false ? '/compact before sending' : 'next send compacts'
       line2.push({
         segs: [{ text: `! ${fmtTokens(over)} over the ${fmtTokens(s.window)} window: ${then}`, color: 'error' }],
-        rank: 5,
+        rank: Infinity,
       })
     }
     // A new window (a model switch) moved the percent, not this turn: say so while it is fresh.
     if (hl('window') && s.windowFrom !== undefined) {
-      line2.push({ segs: [{ text: `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`, hl: true }], rank: 4 })
+      line2.push({ segs: [{ text: `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`, hl: true }], rank: 3 })
     }
     if (s.compactAt !== undefined && over === undefined) {
       // "┊ auto-compact at 167.0k (83.0k left)" — the same ┊ as the bar's compaction mark
       const seg: Seg[] = [{ text: `┊ auto-compact at ${fmtTokens(s.compactAt)}` }]
-      let short: Seg[] | undefined
       if (headroom !== undefined) {
-        const left: Seg = { text: fmtTokens(shown('headroom', Math.max(0, headroom))), hl: hl('headroom') }
-        seg.push({ text: ' (' }, left, { text: ' left)' })
-        // short: "┊ 83.0k left"
-        short = [{ text: '┊ ' }, left, { text: ' left' }]
+        seg.push(
+          { text: ' (' },
+          { text: fmtTokens(shown('headroom', Math.max(0, headroom))), hl: hl('headroom') },
+          { text: ' left)' },
+        )
       }
-      line2.push({ segs: seg, rank: 3, short })
+      line2.push({ segs: seg, rank: Infinity })
     }
     // While Claude works, the running turn's growth so far; between turns, the last turn's.
     const turnGrowth =
@@ -1614,7 +1576,7 @@ export const register: Register = on => {
     }
     if (trendTokens.length > 1) line2.push({ segs: [{ text: trendText(trendTokens, s.window) }], rank: 1 })
 
-    const line3: Group[] = [{ segs: [{ text: `session ${duration(now - s.startedAt)}` }], rank: 1 }]
+    const line3: Group[] = [{ segs: [{ text: `session ${duration(now - s.startedAt)}` }], rank: Infinity }]
     if (s.usd !== undefined) line3.push({ segs: [{ text: `$${shown('usd', s.usd).toFixed(2)}`, hl: hl('usd') }], rank: 4 })
     s.limits.forEach((l, i) => {
       const key = `limit:${l.kind}`
