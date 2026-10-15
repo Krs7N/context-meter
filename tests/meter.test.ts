@@ -225,7 +225,8 @@ describe('bar runs', () => {
   })
 })
 
-test('idle Clawd falls asleep with zZzZ and wakes on a prompt', async ($, on) => {
+// 3 minutes of the 100 ms timer: about 2 s alone, more on a busy machine
+test('idle Clawd falls asleep with zZzZ and wakes on a prompt', { timeoutMs: 20_000 }, async ($, on) => {
   on('session.usage', () => ({ value: usage(50_000, 25) }))
   on('session.start', () => ({ cwd: '.' }))
   on('prompt.submit', ($, e) => ({ text: e.text }) as never)
@@ -1206,7 +1207,8 @@ describe('readings', () => {
     await ui.unmount()
   })
 
-  test('the session clock runs between readings', async ($, on) => {
+  // 2 minutes of the 100 ms timer
+  test('the session clock runs between readings', { timeoutMs: 20_000 }, async ($, on) => {
     on('session.usage', () => ({ value: usage(50_000, 25) }))
     on('session.start', () => ({ cwd: '.' }))
     const clock = mock.clock(on, { now: 600_000 })
