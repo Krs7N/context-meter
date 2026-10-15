@@ -351,7 +351,19 @@ export function tween(from: number, to: number, step: number): number {
   const t = Math.max(0, step) / TWEEN_STEPS
   return from + (to - from) * (1 - (1 - t) ** 3)
 }
-const SLEEP_AFTER_TICKS = Math.round((3 * 60_000) / TICK_MS) // 3 min without activity
+const SLEEP_AFTER_MINUTES = 5
+
+/**
+ * Frames without activity before Clawd falls asleep, from the `sleepAfterMinutes` setting:
+ * 0 keeps him awake; anything but a number of at least 0 keeps the default 5 minutes.
+ */
+export function sleepTicks(minutes: unknown): number {
+  const m = typeof minutes === 'number' && Number.isFinite(minutes) && minutes >= 0 ? minutes : SLEEP_AFTER_MINUTES
+  return m === 0 ? Infinity : Math.round((m * 60_000) / TICK_MS)
+}
+
+/** Set from the plugin's options each time the module loads (a settings change reloads it). */
+let sleepAfterTicks = sleepTicks(SLEEP_AFTER_MINUTES)
 
 /**
  * Bar color by fill: orange, then `warning` from 60 %, `error` from 80 %. With the
@@ -1162,7 +1174,9 @@ async function markActive($: EngineInterface): Promise<void> {
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  sleepAfterTicks = sleepTicks(options?.sleepAfterMinutes)
+
   on('session.start', async ($, e, next) => {
     // A reload drops the module's count-up step but not the state's: land any count-up
     // that was running, so its numbers do not freeze midway.
@@ -1412,10 +1426,10 @@ export const register: Register = on => {
     const over = s.tokens !== undefined && s.window > 0 && s.tokens > s.window ? s.tokens - s.window : undefined
 
     const idleTicks = tick - awake
-    const isAsleep = !isWorking && idleTicks >= SLEEP_AFTER_TICKS
+    const isAsleep = !isWorking && idleTicks >= sleepAfterTicks
     const isBlinking = !isAsleep && tick % BLINK_EVERY === BLINK_EVERY - 1
     const typing = isWorking ? tick : undefined
-    const zzz = CLAWD.zzz[Math.floor((idleTicks - SLEEP_AFTER_TICKS) / 2) % CLAWD.zzz.length]
+    const zzz = isAsleep ? CLAWD.zzz[Math.floor((idleTicks - sleepAfterTicks) / 2) % CLAWD.zzz.length] : undefined
     const clawd = clawdRows({ outfit: outfitFor(eff), isShut: isAsleep || isBlinking, typing, zzz: isAsleep ? zzz : undefined })
     const hasCategories = isDetailed && s.categories.length > 0
 

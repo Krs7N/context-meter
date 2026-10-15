@@ -4,6 +4,7 @@
 
 - Claude Code Desktop draws the band again. Desktop runs its own bundled Claude Code (2.1.295), whose Text refuses the `mono` prop, so it drew no band at all. The monospaced face is now set only on engines that take it (2.1.299 or later); older engines, or ones whose version is unknown, get the page font instead.
 - Until the first reading, the band shows one line, `Context waiting for the first reply`, instead of nothing. Where reading the usage fails, it shows why (`reading failed on desktop: …`), and the reason goes to the debug log.
+- Clawd stays awake for 5 minutes without activity, not 3. The new setting `sleepAfterMinutes` ("Clawd naps after (minutes)" in `/config`) changes it, and `0` keeps him awake.
 
 ## 0.3.2 — 2026-10-15
 

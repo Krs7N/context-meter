@@ -7,5 +7,14 @@
   "repository": "https://github.com/Krs7N/context-meter",
   "license": "MIT",
   "keywords": ["context", "meter", "tokens", "effort", "mascot", "mod"],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "sleepAfterMinutes": {
+      "type": "number",
+      "title": "Clawd naps after (minutes)",
+      "description": "Minutes without activity before Clawd falls asleep. 0 keeps him awake.",
+      "default": 5,
+      "min": 0
+    }
+  }
 }

@@ -22,6 +22,20 @@ Requires Claude Code 2.1.295 or later. Claude Code Desktop runs its own bundled 
 
 **Update** to a newer version with `/plugin update context-meter`. **Remove** the mod with `/plugin uninstall context-meter`.
 
+### Settings
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `sleepAfterMinutes` ("Clawd naps after (minutes)") | `5` | Minutes without activity before Clawd falls asleep. `0` keeps him awake. |
+
+Change it in `/config`, where it is a row of its own, or from a shell:
+
+```
+echo '{"sleepAfterMinutes":"10"}' | claude plugin configure context-meter@context-meter --values-stdin
+```
+
+A change reloads the mod with the new value.
+
 ### Run it from a clone instead
 
 ```
@@ -120,7 +134,7 @@ Clawd as the Claude Code welcome banner draws him, in the frame's left corner, s
   | max, ultracode | a tall purple magician's hat with a gold band, and nothing else |
 
   He is 13 cells wide in every outfit, so the stats beside him never move.
-- Asleep: after 3 minutes without activity (`SLEEP_AFTER_TICKS`), he leaves the keyboard (his legs show again in its place), his eyes close (inside the glasses too) and "zZzZ" grows out from the top-left of his head, in an extra row above him and any hat. He keeps his outfit while asleep. A prompt, a model request or a new reading wakes him (`markActive`).
+- Asleep: after 5 minutes without activity (the `sleepAfterMinutes` setting; `0` keeps him awake), he leaves the keyboard (his legs show again in its place), his eyes close (inside the glasses too) and "zZzZ" grows out from the top-left of his head, in an extra row above him and any hat. He keeps his outfit while asleep. A prompt, a model request or a new reading wakes him (`markActive`).
 - Frames live in the `CLAWD` constant in `hooks/register.tsx`; the timing in
   `TICK_MS` (tick length) and `BLINK_EVERY` (ticks between blinks).
 

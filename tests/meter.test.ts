@@ -20,6 +20,7 @@ import {
   parseEffortOutput,
   savedEffort,
   resetText,
+  sleepTicks,
   sparkline,
   takesMono,
   trendText,
@@ -238,8 +239,8 @@ describe('bar runs', () => {
   })
 })
 
-// 3 minutes of the 100 ms timer: about 2 s alone, more on a busy machine
-test('idle Clawd falls asleep with zZzZ and wakes on a prompt', { timeoutMs: 20_000 }, async ($, on) => {
+// 5 minutes of the 100 ms timer: about 3 s alone, more on a busy machine
+test('idle Clawd falls asleep with zZzZ after 5 minutes and wakes on a prompt', { timeoutMs: 30_000 }, async ($, on) => {
   on('session.usage', () => ({ value: usage(50_000, 25) }))
   on('session.start', () => ({ cwd: '.' }))
   on('prompt.submit', ($, e) => ({ text: e.text }) as never)
@@ -247,7 +248,7 @@ test('idle Clawd falls asleep with zZzZ and wakes on a prompt', { timeoutMs: 20_
   await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120) })
   expect(await ui.find({ type: 'Text', text: /z/ })).toBeUndefined()
-  await clock.advance(2 * 60_000)
+  await clock.advance(4 * 60_000)
   expect(await ui.find({ type: 'Text', text: /[zZ]/ })).toBeUndefined()
   await clock.advance(60_000 + 700 * 4)
   expect(await ui.find({ type: 'Text', text: /[zZ]{2}/ })).toBeDefined()
@@ -259,6 +260,27 @@ test('idle Clawd falls asleep with zZzZ and wakes on a prompt', { timeoutMs: 20_
   await clock.advance(700)
   expect(await ui.find({ type: 'Text', text: /[zZ]/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('the time Clawd stays awake is a setting', { options: { sleepAfterMinutes: 1 }, timeoutMs: 20_000 }, async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  const clock = mock.clock(on, { now: 600_000 })
+  await $.session.start(START)
+  const ui = await band($, 120)
+  await clock.advance(50_000)
+  expect(await ui.find({ type: 'Text', text: /[zZ]/ })).toBeUndefined()
+  await clock.advance(10_000 + 700 * 4)
+  expect(await ui.find({ type: 'Text', text: /[zZ]{2}/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the sleep setting in frames: 0 never sleeps, a bad value keeps 5 minutes', async () => {
+  expect(sleepTicks(5)).toBe(Math.round(300_000 / 700))
+  expect(sleepTicks(1)).toBe(Math.round(60_000 / 700))
+  expect(sleepTicks(0.5)).toBe(Math.round(30_000 / 700))
+  expect(sleepTicks(0)).toBe(Infinity)
+  for (const bad of [undefined, -1, Number.NaN, '5', true]) expect(sleepTicks(bad)).toBe(sleepTicks(5))
 })
 
 test('on the desktop Clawd is one picture, and from 2.1.299 the band is set in the monospaced face', async ($, on) => {
