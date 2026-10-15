@@ -205,8 +205,16 @@ export function tween(from: number, to: number, step: number): number {
 }
 const SLEEP_AFTER_TICKS = Math.round((3 * 60_000) / TICK_MS) // 3 min without activity
 
-/** Bar color by fill: orange, then `warning` from 60 %, `error` from 80 %. */
-export function fillColor(percent: number): string {
+/**
+ * Bar color by fill: orange, then `warning` from 60 %, `error` from 80 %. With the
+ * auto-compact point known (as a percent of the window), by how near the fill is to
+ * it instead: `warning` from three quarters of the way, `error` from 95 %.
+ */
+export function fillColor(percent: number, compactPercent?: number): string {
+  if (compactPercent !== undefined && compactPercent > 0) {
+    const ratio = percent / compactPercent
+    return ratio >= 0.95 ? 'error' : ratio >= 0.75 ? 'warning' : 'claude'
+  }
   return percent >= 80 ? 'error' : percent >= 60 ? 'warning' : 'claude'
 }
 
@@ -303,9 +311,11 @@ export function trendText(values: readonly number[]): string {
   return `trend ${sparkline(shown)} ${shown[0]}→${shown[shown.length - 1]}%`
 }
 
+/** "42m", "3h 5m", and from a day on "1d 2h". */
 export function duration(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000))
   const h = Math.floor(minutes / 60)
+  if (h >= 24) return `${Math.floor(h / 24)}d ${h % 24}h`
   return h > 0 ? `${h}h ${minutes % 60}m` : `${minutes}m`
 }
 
@@ -377,10 +387,20 @@ async function refreshEffort($: EngineInterface): Promise<void> {
   }
 }
 
-/** The saved effort for a model: `modelSettings[model].effortLevel`, else the top-level `effortLevel`. */
+/**
+ * The saved effort for a model: `modelSettings[model].effortLevel`, else the first
+ * `modelSettings` entry naming the same model another way (settings key by id, the
+ * session may say "Opus 5.5"), else the top-level `effortLevel`.
+ */
 export function savedEffort(settings: Readonly<Record<string, unknown>>, model?: string): string | undefined {
   const perModel = settings.modelSettings as Record<string, { effortLevel?: unknown } | undefined> | undefined
-  const level = (model ? perModel?.[model]?.effortLevel : undefined) ?? settings.effortLevel
+  let level = model ? perModel?.[model]?.effortLevel : undefined
+  if (level === undefined && model && perModel) {
+    const label = modelLabel(model)
+    level = Object.entries(perModel).find(([key, v]) => v?.effortLevel !== undefined && modelLabel(key) === label)?.[1]
+      ?.effortLevel
+  }
+  level ??= settings.effortLevel
   return typeof level === 'string' ? level : undefined
 }
 
@@ -465,14 +485,26 @@ export function modelFamily(name: string | null | undefined): ModelChoice | unde
   return MODEL_CHOICES.find(f => lower.includes(f))
 }
 
-/** A model as the badge shows it: "claude-opus-5-5" → "Opus 5.5"; an unknown name as given. */
+/**
+ * A model as the badge shows it: "claude-opus-5-5" → "Opus 5.5", "claude-opus-4-20250514"
+ * → "Opus 4", "claude-3-5-haiku-20241022" → "Haiku 3.5", "claude-opus-5-5[1m]" →
+ * "Opus 5.5 · 1M"; an unknown name as given.
+ */
 export function modelLabel(name: string | null | undefined): string {
   if (!name) return 'model ?'
   const family = modelFamily(name)
   if (!family) return name.replace(/`/g, '')
-  const version = /(\d+)[-.](\d+)/.exec(name)
+  // the version right after the family; a date is no minor version
+  const after = new RegExp(`${family}[-_ ]?(\\d{1,2})(?:[-.](\\d{1,2}))?(?!\\d)`, 'i').exec(name)
+  // older ids put it before the family: claude-3-5-haiku
+  const before = after
+    ? undefined
+    : /(?<!\d)(\d{1,2})[-.](\d{1,2})[-.]/.exec(name.slice(0, name.toLowerCase().indexOf(family)))
+  const [, major, minor] = after ?? before ?? []
   const title = family[0]?.toUpperCase() + family.slice(1)
-  return version ? `${title} ${version[1]}.${version[2]}` : title
+  const version = major === undefined ? '' : minor === undefined ? ` ${major}` : ` ${major}.${minor}`
+  const isLong = /\[1m\]|1m context/i.test(name)
+  return `${title}${version}${isLong ? ' · 1M' : ''}`
 }
 
 /** What `/model <alias>` printed: "Set model to Opus 5.5 …", "Kept model as `Opus 5.5`". */
@@ -502,7 +534,7 @@ async function pickModel($: EngineInterface, alias: ModelChoice): Promise<void> 
     const result = await $.command.run({ command: 'model', args: alias })
     const name = parseModelOutput(result.text)
     if (/kept model as/i.test(result.text ?? '') && modelFamily(name) !== alias) {
-      await $.ui.toast(`Claude Code kept ${modelLabel(name)}: type /model ${alias} to switch (it asks to confirm)`)
+      await $.ui.toast(`Claude Code kept ${modelLabel(name)}: /model ${alias} did not switch`)
     } else if (name) {
       await update($, model, () => name)
     }
@@ -769,7 +801,8 @@ export const register: Register = on => {
       return from === undefined || !s.changed.includes(key) ? to : tween(from, to, step)
     }
     const percent = Math.round(shown('percent', s.percent ?? 0))
-    const fill = fillColor(percent)
+    const compactPercent = s.compactAt !== undefined && s.window > 0 ? (s.compactAt / s.window) * 100 : undefined
+    const fill = fillColor(percent, compactPercent)
     const isCompact = columns < 72
     const badge = effortBadge(eff)
     const modelText = `◇ ${modelLabel(modelName ?? s.model)}`
