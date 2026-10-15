@@ -9,7 +9,7 @@ const isPickerOpen = atom({ plugin: 'context-meter', key: 'isPickerOpen' } as co
 const model = atom({ plugin: 'context-meter', key: 'model' } as const, null as string | null)
 const isModelPickerOpen = atom({ plugin: 'context-meter', key: 'isModelPickerOpen' } as const, false)
 const tweenStep = atom({ plugin: 'context-meter', key: 'tweenStep' } as const, 0)
-const history = atom({ plugin: 'context-meter', key: 'history' } as const, [])
+const trend = atom({ plugin: 'context-meter', key: 'trend' } as const, [])
 const frame = atom({ plugin: 'context-meter', key: 'frame' } as const, 0)
 const awakeTick = atom({ plugin: 'context-meter', key: 'awakeTick' } as const, 0)
 const showDetails = atom({ plugin: 'context-meter', key: 'showDetails' } as const, false)
@@ -191,7 +191,7 @@ export function litKey(t: number): readonly [number, number, number] {
 
 const TICK_MS = 700
 const BLINK_EVERY = 6 // ticks: a 0.7 s blink about every 4 s
-const HISTORY_LEN = 16
+const TREND_KEEP = 16
 const HIGHLIGHT_TICKS = 14 // a changed number stays highlighted about 10 s
 const HL_COLOR = 'suggestion'
 const TWEEN_STEPS = 60 // a changed number counts up in 60 steps…
@@ -305,10 +305,20 @@ export function sparkline(values: readonly number[]): string {
 
 const TREND_LEN = 8
 
-/** "trend ▁▂▃▅▇ 12→42%": the last TREND_LEN readings' shape, then where the fill started and is now. */
-export function trendText(values: readonly number[]): string {
-  const shown = values.slice(-TREND_LEN)
-  return `trend ${sparkline(shown)} ${shown[0]}→${shown[shown.length - 1]}%`
+/**
+ * "trend ▁▂▃▅▇ 12→42%": the last TREND_LEN turn ends' tokens as a shape, then where the
+ * fill started and is now, as percents of `window` (the one shown now, so a model switch
+ * draws no spike). With no window known, the tokens themselves.
+ */
+export function trendText(tokens: readonly number[], window: number): string {
+  const shown = tokens.slice(-TREND_LEN)
+  const first = shown[0] ?? 0
+  const last = shown[shown.length - 1] ?? 0
+  const ends =
+    window > 0
+      ? `${Math.round((first / window) * 100)}→${Math.round((last / window) * 100)}%`
+      : `${fmtTokens(first)}→${fmtTokens(last)}`
+  return `trend ${sparkline(shown)} ${ends}`
 }
 
 /** "42m", "3h 5m", and from a day on "1d 2h". */
@@ -375,9 +385,13 @@ export function parseEffortOutput(text: string): Partial<Effort> {
   return found
 }
 
-/** The `/config` row for effort, when this build has one: a starting value before the first request. */
+/**
+ * The `/config` row for effort, when this build has one: a starting value before the
+ * first request. Once a request or a pick named the level, `/config` is not read again.
+ */
 async function refreshEffort($: EngineInterface): Promise<void> {
   try {
+    if ((await read($, effort)).level !== undefined) return
     const row = (await $.config.list()).find(r => /^effort/i.test(r.key) || /^effort/i.test(r.label))
     const level = row?.value
     if (typeof level !== 'string' && typeof level !== 'number') return
@@ -544,12 +558,18 @@ async function pickModel($: EngineInterface, alias: ModelChoice): Promise<void> 
   }
 }
 
-/** The keys of the numbers that differ between two readings ('limit:<kind>' per rate-limit window). */
+/**
+ * The keys of the numbers that differ between two readings ('limit:<kind>' per
+ * rate-limit window). A new window is its own change: the percent then moved because
+ * the window did, so it is not counted as fill. A turn's growth (`delta`) is added by
+ * the turn end alone.
+ */
 export function changedKeys(old: Snapshot | null | undefined, next: Snapshot): string[] {
   if (!old) return []
   const keys: string[] = []
-  if (next.tokens !== undefined && next.tokens !== old.tokens) keys.push('tokens', 'headroom', 'delta')
-  if (next.percent !== undefined && next.percent !== old.percent) keys.push('percent')
+  if (next.tokens !== undefined && next.tokens !== old.tokens) keys.push('tokens', 'headroom')
+  if (next.window !== old.window) keys.push('window')
+  else if (next.percent !== undefined && next.percent !== old.percent) keys.push('percent')
   if (next.usd !== undefined && Math.round((next.usd ?? 0) * 100) !== Math.round((old.usd ?? 0) * 100)) keys.push('usd')
   for (const l of next.limits) {
     const before = old.limits.find(o => o.kind === l.kind)
@@ -558,26 +578,59 @@ export function changedKeys(old: Snapshot | null | undefined, next: Snapshot): s
   return keys
 }
 
-export function toSnapshot(u: SessionUsage, now: number, previous?: Snapshot | null, tick = 0): Snapshot {
+/**
+ * A reading as the meter keeps it. With no `previous` it is fresh: nothing is
+ * highlighted and "this turn" counts from its tokens. A reading without a breakdown,
+ * in an unchanged window, keeps the last breakdown's figures. A turn end
+ * (`isTurnEnd`) measures the turn's growth from `turnBase` and starts the next turn there.
+ */
+export function toSnapshot(
+  u: SessionUsage,
+  now: number,
+  previous?: Snapshot | null,
+  tick = 0,
+  isTurnEnd = false,
+): Snapshot {
   const b = u.context.breakdown
-  const categories = (b?.categories ?? [])
-    .filter(c => c.kind === 'used' && c.tokens > 0)
-    .sort((x, y) => y.tokens - x.tokens)
-    .slice(0, 5)
-    .map(c => ({ name: c.name, tokens: c.tokens }))
+  const isNewWindow = previous != null && previous.window !== u.context.window
+  const carried = !b && previous != null && !isNewWindow ? previous : undefined
+  const categories = b
+    ? b.categories
+        .filter(c => c.kind === 'used' && c.tokens > 0)
+        .sort((x, y) => y.tokens - x.tokens)
+        .slice(0, 5)
+        .map(c => ({ name: c.name, tokens: c.tokens }))
+    : (carried?.categories ?? [])
   const tokens = u.context.tokens
-  const isNewTokens = tokens !== undefined && previous?.tokens !== undefined && tokens !== previous.tokens
+  let turnBase = previous ? previous.turnBase : tokens
+  let lastDelta = previous?.lastDelta
+  let compaction = previous?.compaction
+  let isTurnMeasured = false
+  if (isTurnEnd && tokens !== undefined) {
+    if (turnBase !== undefined) {
+      lastDelta = tokens - turnBase
+      compaction = undefined
+      isTurnMeasured = true
+    } else {
+      lastDelta = undefined
+    }
+    turnBase = tokens
+  }
   const next: Snapshot = {
     tokens,
     window: u.context.window,
     percent: u.context.percent,
-    compactAt: b?.isAutoCompactEnabled ? b.autoCompactThreshold : undefined,
-    model: b?.model,
+    compactAt: b ? (b.isAutoCompactEnabled ? b.autoCompactThreshold : undefined) : carried?.compactAt,
+    isAutoCompact: b ? b.isAutoCompactEnabled : carried?.isAutoCompact,
+    model: b ? b.model : carried?.model,
     categories,
     usd: u.cost?.usd,
     limits: u.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, resetsAt: r.resetsAt })),
     startedAt: u.startedAt,
-    lastDelta: isNewTokens ? tokens - previous.tokens! : previous?.lastDelta,
+    lastDelta,
+    turnBase,
+    windowFrom: isNewWindow ? previous.window : previous?.windowFrom,
+    compaction,
     at: now,
     changed: previous?.changed ?? [],
     changedTick: previous?.changedTick ?? tick,
@@ -585,6 +638,7 @@ export function toSnapshot(u: SessionUsage, now: number, previous?: Snapshot | n
     from: previous?.from ?? {},
   }
   const keys = changedKeys(previous, next)
+  if (isTurnMeasured && lastDelta !== 0) keys.push('delta')
   if (keys.length > 0 && previous) {
     next.changed = keys
     next.changedTick = tick
@@ -612,28 +666,51 @@ function fromValues(old: Snapshot, keys: readonly string[]): Record<string, numb
   return from
 }
 
-async function refresh($: EngineInterface): Promise<void> {
+type RefreshOptions = {
+  /** Read the window's breakdown too (auto-compact point, categories); default true. */
+  breakdown?: boolean
+  /** A main-thread turn just ended: measure its growth and add a trend point. */
+  isTurnEnd?: boolean
+  /** Read as if nothing came before: a new conversation (/clear, /resume). */
+  isFresh?: boolean
+  /** The context's tokens as a request's own usage gave them, newer than the engine's figures. */
+  stepTokens?: number
+}
+
+/** Takes a reading and stores it; true when one was stored. */
+async function refresh($: EngineInterface, opts: RefreshOptions = {}): Promise<boolean> {
   try {
-    const [usage, now, tick] = await Promise.all([
-      $.session.usage({ breakdown: 'summary', columns: 40 }),
+    const [read0, now, tick] = await Promise.all([
+      $.session.usage(opts.breakdown === false ? undefined : { breakdown: 'summary', columns: 40 }),
       $.clock.now(),
       read($, frame),
     ])
-    let isNewReading = false
+    let usage = read0
+    const stepTokens = opts.stepTokens
+    if (stepTokens !== undefined) {
+      const window = read0.context.window
+      const percent = window > 0 ? Math.min(100, Math.round((stepTokens / window) * 100)) : undefined
+      usage = { ...read0, context: { ...read0.context, tokens: stepTokens, percent } }
+    }
+    let isFresh = false
     let isChanged = false
     await update($, snap, old => {
-      isNewReading = usage.context.tokens !== undefined && usage.context.tokens !== old?.tokens
-      const next = toSnapshot(usage, now, old, tick)
-      isChanged = old !== null && next.changedTick === tick && next.changed.length > 0 && next.changed !== old.changed
+      const previous = opts.isFresh ? null : old
+      isFresh = previous === null
+      const next = toSnapshot(usage, now, previous, tick, opts.isTurnEnd)
+      isChanged =
+        previous !== null && next.changedTick === tick && next.changed.length > 0 && next.changed !== previous.changed
       return next
     })
     if (isChanged) await startCountUp($)
-    const percent = usage.context.percent
-    if (isNewReading && percent !== undefined) {
-      await update($, history, h => [...h, percent].slice(-HISTORY_LEN))
+    const tokens = usage.context.tokens
+    if ((isFresh || opts.isTurnEnd) && tokens !== undefined) {
+      await update($, trend, t => (t[t.length - 1] === tokens ? t : [...t, tokens].slice(-TREND_KEEP)))
     }
+    return true
   } catch {
     // usage unavailable (no session bound yet): keep the last reading
+    return false
   }
 }
 
@@ -713,11 +790,13 @@ export const register: Register = on => {
     return result
   }).catch(($, e, next) => next(e))
 
+  // A main-thread turn ended (the fill moved), or only the cost or a rate limit did.
   // Also (re)starts the timer: a /clear ends the session without a new session.start.
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
     startTicker($)
-    await Promise.all([refresh($), refreshEffort($), markActive($)])
+    const isTurnEnd = e.changed.includes('context')
+    await Promise.all([refresh($, { breakdown: isTurnEnd, isTurnEnd }), refreshEffort($), markActive($)])
     return result
   })
 
@@ -778,9 +857,9 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
-    const [s, trend, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking] = await Promise.all([
+    const [s, trendTokens, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking] = await Promise.all([
       read($, snap),
-      read($, history),
+      read($, trend),
       read($, frame),
       read($, showDetails),
       read($, effort),
@@ -983,7 +1062,7 @@ export const register: Register = on => {
         { text: `${s.lastDelta > 0 ? '+' : '−'}${fmtTokens(Math.abs(delta))}`, hl: hl('delta') },
       ])
     }
-    if (trend.length > 1) line2.push([{ text: trendText(trend) }])
+    if (trendTokens.length > 1) line2.push([{ text: trendText(trendTokens, s.window) }])
 
     const line3: Seg[][] = [[{ text: `session ${duration(s.at - s.startedAt)}` }]]
     if (s.usd !== undefined) line3.push([{ text: `$${shown('usd', s.usd).toFixed(2)}`, hl: hl('usd') }])

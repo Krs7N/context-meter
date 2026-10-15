@@ -3,14 +3,16 @@ export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 export type Category = { name: string; tokens: number }
 
 export type Snapshot = {
-  /** Input tokens of the last response (absent before the first one). */
+  /** Input tokens of the last response (absent before the first one, and right after a compaction). */
   tokens?: number
   /** The model's context window, in tokens. */
   window: number
-  /** tokens / window, whole percent. */
+  /** tokens / window, whole percent, capped at 100 by the engine. */
   percent?: number
   /** Token count at which auto-compaction runs, when it is on. */
   compactAt?: number
+  /** Auto-compaction is on, as the last breakdown said; absent until one was read. */
+  isAutoCompact?: boolean
   /** Model the breakdown was computed for. */
   model?: string
   /** Largest used categories of the window, biggest first. */
@@ -21,11 +23,20 @@ export type Snapshot = {
   limits: Limit[]
   /** When the session began, in $.clock.now() milliseconds. */
   startedAt: number
-  /** Token growth since the previous reading. */
+  /** Token growth of the last completed turn: its end's tokens less `turnBase`. */
   lastDelta?: number
+  /**
+   * Tokens at the last turn end, or at a fresh reading: "this turn" counts from here.
+   * Absent after a compaction until the next turn end sets it.
+   */
+  turnBase?: number
+  /** The window before the last window change (a model switch), for the `window 1.00M → 200.0k` chip. */
+  windowFrom?: number
+  /** The last main-conversation compaction, kept until a turn end measures a real `lastDelta`. */
+  compaction?: { before?: number; after?: number }
   /** When this reading was taken, in $.clock.now() milliseconds. */
   at: number
-  /** Which numbers changed at the last change: tokens, headroom, delta, percent, usd, limit:<kind>. */
+  /** Which numbers changed at the last change: tokens, headroom, delta, percent, window, usd, limit:<kind>. */
   changed: string[]
   /** The mascot frame tick at which `changed` was recorded (drives the highlight's fade). */
   changedTick: number
@@ -40,6 +51,8 @@ export type Effort = {
   level?: string | number
   /** Ultracode is on for this session, as the last `/effort` output said. */
   isUltra: boolean
+  /** The model takes no effort: the main thread's last request carried none. */
+  isUnsupported?: boolean
 }
 
 declare module 'claude-code' {
@@ -55,7 +68,8 @@ declare module 'claude-code' {
       model: string | null
       /** The model picker column is open. */
       isModelPickerOpen: boolean
-      history: number[]
+      /** Tokens at each turn end (and at a fresh reading), the last 16; percents are taken against the window shown. */
+      trend: number[]
       frame: number
       /** Frame tick of the last activity; Clawd sleeps once idle long enough. */
       awakeTick: number

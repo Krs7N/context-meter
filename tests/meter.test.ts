@@ -149,6 +149,10 @@ describe('formatting', () => {
     // a resumed session counts from its first launch, days ago
     expect(duration(26 * 3_600_000 + 5 * 60_000)).toBe('1d 2h')
   })
+
+  test('a trend with no window shows tokens', async () => {
+    expect(trendText([10_000, 20_000], 0)).toBe('trend ▁█ 10.0k→20.0k')
+  })
 })
 
 test('band shows fill, tokens, cost and limits; a new reading redraws it', async ($, on) => {
