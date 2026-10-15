@@ -1,0 +1,84 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+context-meter is a Claude Code **mod**: a hooks-module plugin (no build step, no package.json) that draws a live band above the prompt with the context window's fill bar, tokens, auto-compact headroom, trend, cost and rate limits, plus a model picker, an effort picker and Clawd the mascot. The repo is also its own marketplace (`/plugin install context-meter --marketplace Krs7N/context-meter`). It runs on Claude Code 2.1.296+ and was last worked on 2.1.300. The plugin API is early access and changes between releases.
+
+## Commands
+
+Run these from the folder that **contains** the repo (the commands take the mod's folder name):
+
+```
+claude plugin validate context-meter     # manifest, hooks module and $.state contract; warnings only is a pass
+claude plugin test context-meter         # every tests/*.test.ts, in the engine's own test kit (~10 s)
+claude --plugin-dir ./context-meter      # run it in a real session; hot-reloads on save
+```
+
+- There is no test filter and no `test.only`. To run one test, copy `.claude-plugin/`, `hooks/`, `types/` and a test file holding just that test into a scratch folder and run `claude plugin test` on that folder.
+- Type-check: once Claude Code has loaded the mod from this folder, `.claude-plugin/types/` holds the engine's types (gitignored) and `npx -y -p typescript@5.6.3 tsc -p context-meter` works (`tsconfig.json` extends it). `claude plugin test` does not write that folder. Without it, use a tsconfig kept outside the repo whose `include` names the plugin-authoring skill's `types/claude-code.d.ts` plus this repo's `hooks`, `types` and `tests`, with the compilerOptions from that d.ts's header (`jsx: react`, `jsxFactory: h`, `jsxFragmentFactory: Fragment`, `strict`, `noUncheckedIndexedAccess`, `lib es2023`, no DOM).
+- `--plugin-dir` silently replaces an installed plugin of the same name (`claude plugin list` still shows the installed one). If the band is missing, `claude --debug=hooks` logs `hooks module context-meter … loaded` or `not loaded: <reason>`.
+
+## Architecture
+
+All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It exports `register(on)`, which adds hooks; there are no other modules.
+
+- **State.** Everything the band draws from lives in `$.state` atoms (`snap`, `effort`, `model`, `trend`, `frame`, `tweenStep`, the pickers' flags, …). Every atom must be declared in `types/index.d.ts` under `PluginState['context-meter']`, or `validate` fails. `$.state` survives hot reloads; module variables (`ticker`, `subtick`, `countStep`, `lastSaved`) start over on each reload.
+- **Readings.** `refresh($, { breakdown, isTurnEnd, isFresh, stepTokens })` reads `$.session.usage()` and stores `toSnapshot(usage, now, previous, tick, isTurnEnd)`. There are three kinds of reading:
+  - **fresh:** there is no previous snapshot (first start, `/clear`, `/resume`). Nothing is highlighted, and `turnBase` is set to the current tokens.
+  - **live:** taken after each main-loop request (`turn.step`), with tokens from that response's usage. It never sets `lastDelta` and never adds a trend point.
+  - **turn end:** a `session.measure` whose `changed` includes `context`. It computes `lastDelta = tokens − turnBase`, moves `turnBase`, adds a trend point, and only then reads the breakdown.
+
+  `changedKeys` / `fromValues` drive the change highlight (`changed`, `changedTick`, about 10 s) and the 6 s count-up (`from`, `tweenStep`). A window change (a model switch) is its own key (`window`), never `percent`.
+- **Hooks.**
+  - `session.start`: first reading, starts the ticker, and lands any count-up that a reload interrupted.
+  - `session.measure`: turn ends, plus cost or rate-limit moves.
+  - `turn.step`: the effort the request carried, then a live reading.
+  - `session.compact`: records before and after, then redraws.
+  - `session.end`: `/clear` and `/resume` call `startOver` 300 ms later, because no `session.start` follows them; any other reason stops the ticker.
+  - `prompt.submit`: reads a typed `/effort …`.
+  - `command.run`: reads back what `/effort` and `/model` set.
+  - `ui.render` `{ component: 'AbovePrompt' }`: the band.
+- **One timer.** Every animation (count-up, Clawd's frames, blink, sleep) and the 1.4 s polls (saved effort, `$.session.model()`) run on a single `$.clock.every(100)` ticker (`startTicker`/`onTick`). A hook's own `sleep` loops die with its dispatch budget, so don't add them.
+- **Render.** The band redraws when an atom it read changes; `frame` changes every 0.7 s, so the band redraws at least that often. It picks the one-line layout below 72 columns or when the full band is taller than `props.maxRows`, and otherwise draws the full layout: Clawd (`clawdRows`, 13 cells wide in every outfit) beside three stats rows. Elements come from `$.ui.resolve(e)`, never globals.
+
+## Engine rules that bite
+
+- A render hook never writes state. Write from handlers (`onPress`) or other events, using `update($, atom, fn)`. `update` may run `fn` more than once.
+- Hooks on the request path (`turn.step`, and `tool.call` if one is ever added) must not await anything before `yield* next(e)` / `next(e)`.
+- Gating hooks (`command.run`, `session.compact`) carry `.catch(($, e, next) => next(e))` so a failure in the mod never blocks the command.
+- `AbovePrompt` is raised on the **terminal** (Ink) and **desktop** (Claude Code Desktop, drawn over the wire with its own element table) surfaces only, never on mobile, VS Code, `claude -p` or cloud sessions. `e.surface` says which one is drawing.
+- **Desktop differs from the terminal.**
+  - Desktop draws `Text` as a span in its page font unless the Text has `mono`, so the render hook wraps `Text` to add `mono` off the terminal.
+  - Clawd is drawn as one `Svg` (`clawdSvg`, built from the same `clawdRows` cells). Block glyphs leave gaps between lines in a page.
+  - An Svg is isolated from the theme, so colours are hex (`SVG_COLORS`); only `text` follows light or dark, through `prefers-color-scheme`.
+  - `Button`s are native buttons there even with `plain`.
+  - Keep the terminal tree unchanged when changing the Desktop drawing; the tests pin both.
+  - To look at the Svg, dump `clawdSvg(...).source` from a scratch test and screenshot it with headless Chromium.
+- The plugin API reference is the plugin-authoring skill's `types/claude-code.d.ts` (about 17k lines; grep it for the event or noun) and its `reference.md`.
+
+## Tests
+
+`tests/meter.test.ts` drives the real module through the engine's test kit (`claude-code/testing`). Each test answers the events the mod calls (`on('session.usage', …)`); an unanswered event throws at the bottom, `config.list` and `settings.read` included, and the mod is written to tolerate that. The test kit validates a tree under each surface's rules, but never paints it.
+
+Helpers in the test file:
+- `usage` / `usageIn` / `breakdownOf` build readings.
+- `band($, columns, isWorking, maxRows)` mounts the band.
+- `answer` / `request` run a main-loop `turn.step`.
+- `turnEnds` sends a turn-end measure.
+
+`mock.clock(on, { now })` plus `clock.advance(ms)` drives the ticker. Because the band redraws only on 0.7 s frames, a time-based assertion must allow for the frame phase, and a blink check must span a whole 6-frame period.
+
+## Releases and docs
+
+- The version lives in **both** `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`. The user names each version bump, so don't bump it unasked.
+- `CHANGELOG.md` collects changes under `## Unreleased` until a release. The README screenshot is `docs/context-meter.png`, which the user supplies.
+- Release steps: bump both manifests, move the changelog section under the version, commit, merge to `main`, tag `vX.Y.Z`, then `gh release create`.
+- Design history: `docs/superpowers/specs/` (the audit, its engine facts and the decision guide for what comes next) and `docs/superpowers/plans/`. `handoff.md` holds the current state and next steps; keep it updated at the end of a stage.
+
+## Working with the user
+
+- Replies: terse.
+- Visuals: one tweak at a time, so they can judge each change.
+- Pushing: the repo is public, so ask before pushing.
