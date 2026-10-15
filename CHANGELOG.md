@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- The meter moves during a turn: each model request updates the fill, and row 2 shows `this turn +12.0k` while Claude works. `last turn` is now the whole turn's growth.
+- A model switch redraws the meter at once: the new window, auto-compact point and headroom, with a `window 1.00M → 200.0k` note instead of a `▲` and a count-up. The badge takes the new model's saved effort.
+- A context bigger than the window (after a switch to a smaller model) says what happens next: `! 150.0k over the 200.0k window: next send compacts`, or `/compact before sending` with auto-compaction off. The tokens turn red, in the one-line meter too.
+- The trend keeps tokens, so a smaller window no longer draws a fake spike; its percents are of the window shown now.
+- `/clear` and `/resume` start the meter over: no `last turn −125.0k`, no `▼` and no trend across conversations. Clawd keeps animating after `/resume`.
+- `/compact` redraws at once: `~31.0k / 200.0k tokens` until the next reply, and `compacted 182.0k → 31.0k` in row 2.
+- A model that takes no effort shows `– no effort` instead of the last model's level and outfit.
+- A short band slot (fullscreen, a low terminal) gets the one-line meter instead of a band that scrolls and cuts Clawd.
+- The session clock runs between readings, and counts days: `1d 2h`.
+- The bar turns `warning` and `error` as the fill nears the auto-compact point, not at fixed percents of the window.
+- Model names: `Opus 4` for dated ids, `Haiku 3.5` for older ids, `Opus 5.5 · 1M` for the 1M-context variant.
+- The saved effort is looked up for the current model, by id or by its shown name.
+- When Claude Code keeps the model, the toast no longer advises typing `/model`, which answers the same: `Claude Code kept Opus 5.5: /model sonnet did not switch`.
+- A reload during a count-up lands the numbers instead of freezing them midway.
+- Less work per turn: the breakdown is read only when the fill moved, `/config` only until the effort is known, and nothing is awaited before a request is sent.
+
 ## 0.3.0 — 2026-10-14
 
 - **Model picker:** a `◇ Opus 5.5 ▾` badge left of the effort badge. Click it for a vertical picker like the effort one: smaller models above (`haiku`, `sonnet`), larger below (`opus`, `fable`). A pick runs `/model <alias>`. The badge follows the model however it changes. The model moved out of row 3 into the badge.

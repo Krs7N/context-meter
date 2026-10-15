@@ -892,6 +892,23 @@ describe('readings', () => {
     await turnEnds($, usage(50_000, 25))
     expect(listed).toBe(1)
   })
+
+  test('a model without effort is not given a level from /config', async ($, on) => {
+    let listed = 0
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('config.list', () => {
+      listed++
+      return { value: [] } as never
+    })
+    on('turn.step', answer(() => 50_000))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($)
+    await turnEnds($, usage(50_000, 25))
+    expect(listed).toBe(1)
+  })
 })
 
 test('a short band slot gets the one-line meter', async ($, on) => {

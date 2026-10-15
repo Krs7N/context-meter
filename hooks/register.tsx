@@ -1019,7 +1019,7 @@ export const register: Register = on => {
     const badgeWidth = (badge ? [...badge.text].length : 8) + 3 + [...modelText].length + 4
     const width = Math.max(10, Math.min(40, columns - (isCompact ? 42 : 60) - badgeWidth))
 
-    // A changed number stays highlighted for HIGHLIGHT_TICKS ticks (about 5 s).
+    // A changed number stays highlighted for HIGHLIGHT_TICKS ticks (about 10 s).
     const isFresh = tick - s.changedTick < HIGHLIGHT_TICKS
     const hl = (key: string) => isFresh && s.changed.includes(key)
     const runs = meterRuns({
