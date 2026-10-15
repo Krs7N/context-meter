@@ -1,9 +1,11 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
-import type { SessionUsage } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
+import type { SessionContextBreakdown, SessionMessage, SessionUsage, TurnStepInput } from 'claude-code'
 
 import {
   bar,
   clawdRows,
+  duration,
   outfitFor,
   effortBadge,
   fillColor,
@@ -27,14 +29,97 @@ const usage = (tokens: number, percent: number): SessionUsage => ({
   cost: { usd: 1.5 },
 })
 
-const props = (bodyColumns: number, isWorking = false) => ({
+/** A reading against any window, its percent whole and capped at 100 as the engine gives it. */
+const usageIn = (window: number, tokens?: number, breakdown?: SessionContextBreakdown): SessionUsage => ({
+  startedAt: 0,
+  context: {
+    tokens,
+    window,
+    percent: tokens === undefined ? undefined : Math.min(100, Math.round((tokens / window) * 100)),
+    breakdown,
+  },
+  rateLimits: [{ kind: 'five_hour', percentUsed: 23 }],
+  cost: { usd: 1.5 },
+})
+
+/** The window broken down as /context does; auto-compaction on when `compactAt` is given. */
+const breakdownOf = (o: { window: number; tokens: number; compactAt?: number }): SessionContextBreakdown => ({
+  categories: [],
+  totalTokens: o.tokens,
+  maxTokens: o.window,
+  rawMaxTokens: o.window,
+  autocompactSource: 'model-default',
+  percentage: Math.round((o.tokens / o.window) * 100),
+  gridRows: [],
+  model: 'claude-sonnet-5-5',
+  memoryFiles: [],
+  mcpTools: [],
+  agents: [],
+  autoCompactThreshold: o.compactAt,
+  isAutoCompactEnabled: o.compactAt !== undefined,
+  apiUsage: null,
+})
+
+const props = (bodyColumns: number, isWorking = false, maxRows = 20) => ({
   hasSurvey: false,
   isWorking,
-  maxRows: 20,
+  maxRows,
   bodyColumns,
-  scroll: { offset: 0, bodyRows: 20 },
+  scroll: { offset: 0, bodyRows: maxRows },
   view: {},
 })
+
+const START = { cwd: '.', surface: 'terminal', isInteractive: true } as const
+
+const band = ($: Engine, bodyColumns: number, isWorking = false, maxRows = 20) =>
+  $.ui.mount({
+    plugin: 'context-meter',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: props(bodyColumns, isWorking, maxRows),
+  })
+
+/** The engine answering a model request: nothing streamed, then the response's input-side counts. */
+const answer = (contextTokens: () => number) =>
+  async function* (_$: unknown, e: TurnStepInput) {
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'tool_use' as const,
+      usage: {
+        input_tokens: 2_000,
+        cache_read_input_tokens: contextTokens() - 10_000,
+        cache_creation_input_tokens: 8_000,
+        output_tokens: 900,
+        model: 'claude-opus-5-5',
+      },
+    }
+  }
+
+/** One main-thread model request through the chain, as the engine sends it. */
+async function request($: Engine, effort?: TurnStepInput['effort']) {
+  const stream = $.turn.step({
+    turnId: 't1',
+    index: 0,
+    model: 'claude-opus-5-5',
+    messageCount: 4,
+    ...(effort === undefined ? {} : { effort }),
+  })
+  for await (const _ of stream) {
+    // the engine above streams nothing
+  }
+  return stream.result
+}
+
+/** A conversation to compact, and the summary a compaction leaves of it. */
+const ASKED: SessionMessage = { role: 'user', text: 'fix the meter', toolUses: [] }
+const SUMMARY: SessionMessage = { role: 'user', text: 'Summary: the meter was fixed.', toolUses: [] }
+
+/** A main-thread turn ends: the engine measures the session. */
+const turnEnds = ($: Engine, u: SessionUsage) =>
+  $.session.measure({ context: u.context, rateLimits: u.rateLimits, cost: u.cost, changed: ['context'] })
 
 describe('formatting', () => {
   test('tokens, bar and sparkline', async () => {
@@ -47,12 +132,22 @@ describe('formatting', () => {
     expect(sparkline([0, 50, 100])).toBe('▁▅█')
     // scaled to the values shown, so a small climb still reads as a climb
     expect(sparkline([40, 42, 44])).toBe('▁▅█')
-    expect(trendText([12, 20, 42])).toBe('trend ▁▃█ 12→42%')
+    // the trend keeps tokens; its percents are of the window the meter shows now
+    expect(trendText([24_000, 40_000, 84_000], 200_000)).toBe('trend ▁▃█ 12→42%')
+    expect(trendText([24_000, 40_000, 84_000], 1_000_000)).toBe('trend ▁▃█ 2→8%')
     // only the last 8 readings
-    expect(trendText([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toBe('trend ▁▂▃▄▅▆▇█ 3→10%')
+    const thousands = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(k => k * 1_000)
+    expect(trendText(thousands, 100_000)).toBe('trend ▁▂▃▄▅▆▇█ 3→10%')
     expect(tween(0, 100, 0)).toBe(0)
     expect(tween(0, 100, 60)).toBe(100)
     expect(tween(0, 100, 20)).toBeGreaterThan(50) // ease-out: most of the way early
+  })
+
+  test('durations', async () => {
+    expect(duration(42 * 60_000)).toBe('42m')
+    expect(duration(3 * 3_600_000 + 5 * 60_000)).toBe('3h 5m')
+    // a resumed session counts from its first launch, days ago
+    expect(duration(26 * 3_600_000 + 5 * 60_000)).toBe('1d 2h')
   })
 })
 
@@ -114,6 +209,10 @@ describe('bar runs', () => {
     expect(fillColor(59)).toBe('claude')
     expect(fillColor(60)).toBe('warning')
     expect(fillColor(80)).toBe('error')
+    // with auto-compaction at 50% of the window, 40% is most of the way there
+    expect(fillColor(30, 50)).toBe('claude')
+    expect(fillColor(40, 50)).toBe('warning')
+    expect(fillColor(48, 50)).toBe('error')
   })
 })
 
@@ -278,7 +377,7 @@ test('the model badge opens a picker that runs /model', async ($, on) => {
   await ui.unmount()
 })
 
-test('a model switch Claude Code keeps back tells the person what to type', async ($, on) => {
+test('a model switch Claude Code keeps back says so, without advice that does not work', async ($, on) => {
   on('session.usage', () => ({ value: usage(50_000, 25) }))
   on('session.start', () => ({ cwd: '.' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }) as never)
@@ -293,7 +392,8 @@ test('a model switch Claude Code keeps back tells the person what to type', asyn
   const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120) })
   await ui.press({ key: 'model' })
   await ui.press({ key: 'model-sonnet' })
-  expect(toasts).toEqual(['Claude Code kept Opus 5.5: type /model sonnet to switch (it asks to confirm)'])
+  // typing /model sonnet answers the same, so the toast tells nobody to type it
+  expect(toasts).toEqual(['Claude Code kept Opus 5.5: /model sonnet did not switch'])
   expect(await ui.find({ type: 'Text', text: '◇ Opus 5.5' })).toBeDefined()
   await ui.unmount()
 })
@@ -304,6 +404,11 @@ test('model names', async () => {
   expect(modelLabel('claude-fable-5-1')).toBe('Fable 5.1')
   expect(modelLabel('haiku')).toBe('Haiku')
   expect(modelLabel(null)).toBe('model ?')
+  // a dated id without a minor version, older ids, the 1M-context variant
+  expect(modelLabel('claude-opus-4-20250514')).toBe('Opus 4')
+  expect(modelLabel('claude-sonnet-4-5-20250929')).toBe('Sonnet 4.5')
+  expect(modelLabel('claude-3-5-haiku-20241022')).toBe('Haiku 3.5')
+  expect(modelLabel('claude-opus-5-5[1m]')).toBe('Opus 5.5 · 1M')
   expect(parseModelOutput('Kept model as `Opus 5.5`')).toBe('Opus 5.5')
   expect(parseModelOutput('Set model to Sonnet 5.5 and saved as your default for new sessions')).toBe('Sonnet 5.5')
   expect(parseModelOutput('something else')).toBeUndefined()
@@ -313,6 +418,10 @@ test('saved effort: per-model first, then the top-level default', async () => {
   expect(savedEffort({ effortLevel: 'high', modelSettings: { m: { effortLevel: 'low' } } }, 'm')).toBe('low')
   expect(savedEffort({ effortLevel: 'high' }, 'm')).toBe('high')
   expect(savedEffort({})).toBeUndefined()
+  // settings key a model by id; the session may name it as /model shows it
+  const settings = { effortLevel: 'high', modelSettings: { 'claude-opus-5-5': { effortLevel: 'xhigh' } } }
+  expect(savedEffort(settings, 'Opus 5.5')).toBe('xhigh')
+  expect(savedEffort(settings, 'Sonnet 5.5')).toBe('high')
 })
 
 test('working Clawd types on his keyboard, one arm at a time', async ($, on) => {
@@ -420,5 +529,264 @@ test('Clawd blinks about every four seconds', async ($, on) => {
   expect(lid?.props.backgroundColor).toBe('claude')
   await clock.advance(700)
   expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeDefined()
+  await ui.unmount()
+})
+
+describe('model switch', () => {
+  test('the meter redraws for the new window at once', async ($, on) => {
+    let current = usageIn(1_000_000, 180_000)
+    let name = 'claude-opus-5-5[1m]'
+    on('session.usage', () => ({ value: current }))
+    on('session.model', () => ({ value: name }) as never)
+    on('session.start', () => ({ cwd: '.' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: ' / 1.00M tokens' })).toBeDefined()
+    // switched before any turn ran: the same 180k, now in a 200k window
+    name = 'claude-sonnet-5-5'
+    current = usageIn(200_000, 180_000)
+    await clock.advance(1500)
+    expect(await ui.find({ type: 'Text', text: ' / 200.0k tokens' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /90%/ })).toBeDefined()
+    // the jump is the window's, not this turn's: no ▲, a chip says what changed
+    expect(await ui.find({ type: 'Text', text: /▲/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /window 1\.00M → 200\.0k/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a context bigger than the window says what the next send does', async ($, on) => {
+    let current = usageIn(200_000, 350_000, breakdownOf({ window: 200_000, tokens: 350_000, compactAt: 167_000 }))
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    let ui = await band($, 160)
+    expect(await ui.find({ type: 'Text', text: /150\.0k over the 200\.0k window: next send compacts/ })).toBeDefined()
+    await ui.unmount()
+    // with auto-compaction off, the next send fails unless the person compacts first
+    current = usageIn(200_000, 350_000, breakdownOf({ window: 200_000, tokens: 350_000 }))
+    await $.session.start(START)
+    ui = await band($, 160)
+    expect(await ui.find({ type: 'Text', text: /150\.0k over the 200\.0k window: \/compact before sending/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the trend reads tokens, so a smaller window is no spike', async ($, on) => {
+    let current = usageIn(1_000_000, 140_000)
+    let name = 'claude-opus-5-5[1m]'
+    on('session.usage', () => ({ value: current }))
+    on('session.model', () => ({ value: name }) as never)
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    current = usageIn(1_000_000, 150_000)
+    await turnEnds($, current)
+    current = usageIn(1_000_000, 160_000)
+    await turnEnds($, current)
+    name = 'claude-sonnet-5-5'
+    current = usageIn(200_000, 160_000)
+    await clock.advance(1500)
+    current = usageIn(200_000, 180_000)
+    await turnEnds($, current)
+    const ui = await band($, 180)
+    // 140k, 150k, 160k, 180k: of the 200k window now shown, 70% to 90%
+    expect(await ui.find({ type: 'Text', text: /trend ▁▃▅█ 70→90%/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the badge shows the new model’s saved effort', async ($, on) => {
+    let name = 'claude-opus-5-5'
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.model', () => ({ value: name }) as never)
+    on(
+      'settings.read',
+      () => ({ value: { effortLevel: 'high', modelSettings: { 'claude-sonnet-5-5': { effortLevel: 'low' } } } }) as never,
+    )
+    on('session.start', () => ({ cwd: '.' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: '● high' })).toBeDefined()
+    // named as /model shows it; settings key it by id
+    name = 'Sonnet 5.5'
+    await clock.advance(1500)
+    expect(await ui.find({ type: 'Text', text: '· low' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a model without effort drops the old level from the badge', async ($, on) => {
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answer(() => 50_000))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'max')
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: ' ▲ MAX ' })).toBeDefined()
+    // the new model's requests carry no effort
+    await request($)
+    await clock.advance(700)
+    expect(await ui.find({ type: 'Text', text: /MAX/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /no effort/ })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('readings', () => {
+  test('the meter moves with each request of a running turn', async ($, on) => {
+    let current = usage(84_000, 42)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.step', answer(() => 120_000))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'high')
+    await clock.advance(7000)
+    let ui = await band($, 140, true)
+    expect(await ui.find({ type: 'Text', text: '120.0k' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /60%/ })).toBeDefined()
+    // while it works, row 2 counts this turn's growth
+    expect(await ui.find({ type: 'Text', text: /this turn/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\+36\.0k/ })).toBeDefined()
+    await ui.unmount()
+    // the turn ends: the whole turn's growth, not the last request's
+    current = usage(120_000, 60)
+    await turnEnds($, current)
+    ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\+36\.0k/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const reason of ['clear', 'resume'] as const) {
+    test(`/${reason} starts the meter over`, async ($, on) => {
+      let current: SessionUsage = usage(150_000, 75)
+      on('session.usage', () => ({ value: current }))
+      on('session.start', () => ({ cwd: '.' }))
+      on('session.measure', ($, e) => ({ changed: e.changed }))
+      on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+      const clock = mock.clock(on, { now: 600_000 })
+      await $.session.start(START)
+      await $.session.end({ reason, sessionId: 'old', resume: { id: 'old' } })
+      current = { startedAt: 600_000, context: { window: 200_000 }, rateLimits: [], cost: { usd: 0 } }
+      await clock.advance(1000)
+      const ui = await band($, 140)
+      expect(await ui.find({ type: 'Text', text: /75%/ })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /waiting for the first reply/ })).toBeDefined()
+      // the next conversation's first turn is not measured against the last one
+      current = usage(25_000, 13)
+      await turnEnds($, current)
+      await clock.advance(7000)
+      expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /▼/ })).toBeUndefined()
+      // and the timer still runs: Clawd blinks
+      expect(await ui.find({ type: 'Text', text: '▁' })).toBeUndefined()
+      await clock.advance(700 * 6)
+      expect(await ui.find({ type: 'Text', text: '▁' })).toBeDefined()
+      await ui.unmount()
+    })
+  }
+
+  test('/compact redraws at once with what it freed', async ($, on) => {
+    let current: SessionUsage = usage(182_000, 91)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.compact', () => ({ messages: [SUMMARY], tokensBefore: 182_000, tokensAfter: 31_000 }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    // just compacted: no reply has measured the window yet
+    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
+    await $.session.compact({ trigger: 'manual', messages: [ASKED, SUMMARY] })
+    await clock.advance(7000)
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: /91%/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /~31\.0k/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /compacted 182\.0k → 31\.0k/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a session start (a reload) lands a count-up on the new numbers', async ($, on) => {
+    let current = usage(84_000, 42)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    current = usage(182_000, 91)
+    await turnEnds($, current)
+    await clock.advance(2000)
+    // the hooks module reloads mid count-up: session.start runs again
+    await $.session.start(START)
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: /91%/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '182.0k' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the session clock runs between readings', async ($, on) => {
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: /session 10m/ })).toBeDefined()
+    await clock.advance(2 * 60_000)
+    expect(await ui.find({ type: 'Text', text: /session 12m/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a measure that moved only the cost reads no breakdown', async ($, on) => {
+    const asked: (string | undefined)[] = []
+    on('session.usage', ($, e) => {
+      asked.push(e?.breakdown)
+      return { value: usage(50_000, 25) }
+    })
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    asked.length = 0
+    await $.session.measure({ context: usage(50_000, 25).context, rateLimits: [], cost: { usd: 2 }, changed: ['cost'] })
+    expect(asked).toEqual([undefined])
+  })
+
+  test('the effort is read from /config only while no request has named it', async ($, on) => {
+    let listed = 0
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('config.list', () => {
+      listed++
+      return { value: [] } as never
+    })
+    on('turn.step', answer(() => 50_000))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    expect(listed).toBe(1)
+    await request($, 'high')
+    await turnEnds($, usage(50_000, 25))
+    expect(listed).toBe(1)
+  })
+})
+
+test('a short band slot gets the one-line meter', async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  on('turn.step', answer(() => 50_000))
+  mock.clock(on, { now: 600_000 })
+  await $.session.start(START)
+  // bare Clawd is a face, a body and a two-row keyboard: 6 rows with the border
+  let ui = await band($, 140, false, 8)
+  expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeDefined()
+  await ui.unmount()
+  // the magician's hat makes him 10 rows tall, more than the slot holds
+  await request($, 'max')
+  ui = await band($, 140, false, 8)
+  expect(await ui.find({ type: 'Text', text: /25%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /▄▄█████▄▄/ })).toBeUndefined()
   await ui.unmount()
 })
