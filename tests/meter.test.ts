@@ -729,16 +729,20 @@ describe('readings', () => {
       const ui = await band($, 140)
       expect(await ui.find({ type: 'Text', text: /75%/ })).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: /waiting for the first reply/ })).toBeDefined()
+      // the timer still runs before the next turn ends (a measure would restart it):
+      // over one blink period, 6 frames, Clawd's eyes both open and shut
+      const isShut = new Set<boolean>()
+      for (let frame = 0; frame < 6; frame++) {
+        isShut.add((await ui.find({ type: 'Text', text: '▁' })) !== undefined)
+        await clock.advance(700)
+      }
+      expect([...isShut].sort()).toEqual([false, true])
       // the next conversation's first turn is not measured against the last one
       current = usage(25_000, 13)
       await turnEnds($, current)
       await clock.advance(7000)
       expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: /▼/ })).toBeUndefined()
-      // and the timer still runs: Clawd blinks
-      expect(await ui.find({ type: 'Text', text: '▁' })).toBeUndefined()
-      await clock.advance(700 * 6)
-      expect(await ui.find({ type: 'Text', text: '▁' })).toBeDefined()
       await ui.unmount()
     })
   }
@@ -758,6 +762,24 @@ describe('readings', () => {
     expect(await ui.find({ type: 'Text', text: /91%/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /~31\.0k/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /compacted 182\.0k → 31\.0k/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('auto-compaction mid-turn shows no negative turn growth', async ($, on) => {
+    let current: SessionUsage = usage(150_000, 75)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.compact', () => ({ messages: [SUMMARY], tokensBefore: 150_000, tokensAfter: 30_000 }))
+    on('turn.step', answer(() => 40_000))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
+    await $.session.compact({ trigger: 'auto', messages: [ASKED, SUMMARY] })
+    await request($, 'high')
+    await clock.advance(7000)
+    const ui = await band($, 140, true)
+    expect(await ui.find({ type: 'Text', text: /this turn/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /compacted 150\.0k → 30\.0k/ })).toBeDefined()
     await ui.unmount()
   })
 

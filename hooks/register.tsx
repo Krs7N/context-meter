@@ -794,10 +794,36 @@ async function onTick($: EngineInterface): Promise<void> {
       await update($, tweenStep, () => step)
     }
     if (subtick % SUBTICKS === 0) await update($, frame, t => t + 1)
-    if (subtick % (SUBTICKS * 2) === 0) await Promise.all([pollSavedEffort($), refreshModel($)])
+    if (subtick % (SUBTICKS * 2) === 0) {
+      // no reading since a start-over failed: try again
+      const retry = (await read($, snap)) === null ? refresh($, { isFresh: true }) : undefined
+      await Promise.all([pollSavedEffort($), refreshModel($), retry])
+    }
   } catch {
     // drawing state is best effort
   }
+}
+
+/**
+ * A new conversation in the same process (/clear, an in-process /resume): no
+ * session.start follows, so the meter starts over itself. Nothing is measured against
+ * the last conversation: the trend empties and the reading is fresh.
+ */
+async function startOver($: EngineInterface): Promise<void> {
+  try {
+    startTicker($)
+    await update($, trend, () => [])
+    if (!(await refresh($, { isFresh: true }))) await update($, snap, () => null)
+  } catch {
+    // drawing state is best effort; the ticker retries while there is no reading
+  }
+}
+
+/** "compacted 182.0k → 31.0k", or what the engine recorded of it. */
+function compactionText(c: NonNullable<Snapshot['compaction']>): string {
+  if (c.before !== undefined && c.after !== undefined) return `compacted ${fmtTokens(c.before)} → ${fmtTokens(c.after)}`
+  if (c.after !== undefined) return `compacted to ${fmtTokens(c.after)}`
+  return c.before !== undefined ? `compacted from ${fmtTokens(c.before)}` : 'compacted'
 }
 
 /** A change was recorded: count up from step 0; a newer change restarts it. */
@@ -819,6 +845,14 @@ async function markActive($: EngineInterface): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // A reload drops the module's count-up step but not the state's: land any count-up
+    // that was running, so its numbers do not freeze midway.
+    countStep = TWEEN_STEPS
+    try {
+      await update($, tweenStep, () => TWEEN_STEPS)
+    } catch {
+      // drawing state is best effort
+    }
     startTicker($)
     await Promise.all([refresh($), refreshEffort($), markActive($), refreshModel($)])
     await pollSavedEffort($)
@@ -894,11 +928,40 @@ export const register: Register = on => {
     return result
   }).catch(($, e, next) => next(e))
 
-  // A /clear ends the session but the process and this module go on; keep the timer.
+  // A /clear or an in-process /resume ends the session but the process and this module
+  // go on, under a new conversation and with no session.start: keep the timer and start
+  // over once the new conversation is in place. Any other end stops the timer.
   on('session.end', ($, e, next) => {
-    if (e.reason !== 'clear') stopTicker()
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      try {
+        $.clock.after(300, () => void startOver($))
+      } catch {
+        // no timer: the next measure or prompt still redraws
+      }
+    } else {
+      stopTicker()
+    }
     return next(e)
   })
+
+  // A main-conversation compaction (/compact, or auto at the threshold): no measure
+  // follows until the next reply, so record what it freed and redraw now.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
+      try {
+        await update($, snap, s =>
+          s === null
+            ? s
+            : { ...s, compaction: { before: result.tokensBefore ?? s.tokens, after: result.tokensAfter }, turnBase: undefined },
+        )
+        await refresh($)
+      } catch {
+        // drawing state is best effort
+      }
+    }
+    return result
+  }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
@@ -927,7 +990,11 @@ export const register: Register = on => {
       const from = s.from[key]
       return from === undefined || !s.changed.includes(key) ? to : tween(from, to, step)
     }
-    const percent = Math.round(shown('percent', s.percent ?? 0))
+    // Just compacted, no reply has measured the window yet: draw what the compaction left.
+    const compactedTo = s.tokens === undefined ? s.compaction?.after : undefined
+    const fillPercent =
+      s.percent ?? (compactedTo !== undefined && s.window > 0 ? Math.round((compactedTo / s.window) * 100) : 0)
+    const percent = Math.round(shown('percent', fillPercent))
     const compactPercent = s.compactAt !== undefined && s.window > 0 ? (s.compactAt / s.window) * 100 : undefined
     const fill = fillColor(percent, compactPercent)
     // The engine caps the percent at 100: a context bigger than the window (after a switch
@@ -954,7 +1021,7 @@ export const register: Register = on => {
     const isFresh = tick - s.changedTick < HIGHLIGHT_TICKS
     const hl = (key: string) => isFresh && s.changed.includes(key)
     const runs = meterRuns({
-      percent: shown('percent', s.percent ?? 0),
+      percent: shown('percent', fillPercent),
       prevPercent: hl('percent') ? s.prevPercent : undefined,
       compactFraction: s.compactAt !== undefined && s.window > 0 ? s.compactAt / s.window : undefined,
       width,
@@ -989,7 +1056,12 @@ export const register: Register = on => {
               {` ${percent}%${arrow}`}
             </Text>
           </Box>
-          {s.tokens === undefined ? (
+          {s.tokens === undefined && compactedTo !== undefined ? (
+            <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
+              <Text dimColor>{`~${fmtTokens(compactedTo)}`}</Text>
+              <Text dimColor>{` / ${fmtTokens(s.window)} tokens`}</Text>
+            </Box>
+          ) : s.tokens === undefined ? (
             <Text dimColor>waiting for the first reply</Text>
           ) : (
             <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
@@ -1137,7 +1209,10 @@ export const register: Register = on => {
         : 0
     // the sign is the final value's: a count-up passes through 0
     const signed = (n: number, final = n) => `${final > 0 ? '+' : '−'}${fmtTokens(Math.abs(n))}`
-    if (turnGrowth !== 0) {
+    if (s.compaction !== undefined) {
+      // until a turn end measures a real turn again, the compaction is the news
+      line2.push([{ text: compactionText(s.compaction) }])
+    } else if (turnGrowth !== 0) {
       line2.push([{ text: 'this turn ' }, { text: signed(turnGrowth), hl: hl('tokens') }])
     } else if (s.lastDelta !== undefined && s.lastDelta !== 0) {
       line2.push([
