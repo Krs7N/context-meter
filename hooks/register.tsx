@@ -1177,10 +1177,29 @@ export const register: Register = on => {
     const zzz = CLAWD.zzz[Math.floor((idleTicks - SLEEP_AFTER_TICKS) / 2) % CLAWD.zzz.length]
     const clawd = clawdRows({ outfit: outfitFor(eff), isShut: isAsleep || isBlinking, typing, zzz: isAsleep ? zzz : undefined })
     const hasCategories = isDetailed && s.categories.length > 0
-    // The full band is as tall as Clawd or the stats, plus its border; a slot that cannot
-    // hold it (a short fullscreen terminal) gets the one-line meter instead of a scrolling band.
-    const fullRows = Math.max(clawd.length, 3 + (hasCategories ? 1 : 0)) + 2
+
+    // The picker opens around the badge: lower levels above it, higher ones below, the
+    // ultracode switch last. Ultracode rides on top of a level, so the level places the
+    // badge either way, and with ultracode on the switch turns it off.
+    const levels = EFFORT_CHOICES.filter(c => c !== 'ultracode')
+    const at = levels.findIndex(c => c === eff.level)
+    const above = isPicking && at >= 0 ? levels.slice(0, at) : []
+    const below = isPicking ? [...levels.slice(at + 1), 'ultracode' as const] : []
+    // The model picker works the same way: smaller models above the badge, larger ones below.
+    const family = modelFamily(modelName ?? s.model)
+    const mAt = MODEL_CHOICES.findIndex(c => c === family)
+    const mAbove = isModelPicking && mAt >= 0 ? MODEL_CHOICES.slice(0, mAt) : []
+    const mBelow = isModelPicking ? MODEL_CHOICES.slice(mAt + 1) : []
+    // An open picker column is as tall as its badge and choices.
+    const pickerRows = 1 + Math.max(above.length + below.length, mAbove.length + mBelow.length)
+
+    // The full band is as tall as Clawd, the stats or an open picker, plus its border; a slot
+    // that cannot hold it (a short fullscreen terminal) gets the one-line meter instead of a
+    // scrolling band. Where even a picker column does not fit, its choices go in a row.
+    const fullRows = Math.max(clawd.length, 3 + (hasCategories ? 1 : 0), pickerRows) + 2
     const isCompact = columns < 72 || fullRows > e.props.maxRows
+    const isPickerRow = pickerRows > e.props.maxRows
+    const pickerDirection = isPickerRow ? 'row' : 'column'
     const badge = effortBadge(eff)
     const modelText = `◇ ${modelLabel(modelName ?? s.model)}`
     const badgeWidth = (badge ? [...badge.text].length : 8) + 3 + [...modelText].length + 4
@@ -1248,13 +1267,6 @@ export const register: Register = on => {
       </Box>
     )
 
-    // The picker opens around the badge: lower levels above it, higher ones below, the
-    // ultracode switch last. Ultracode rides on top of a level, so the level places the
-    // badge either way, and with ultracode on the switch turns it off.
-    const levels = EFFORT_CHOICES.filter(c => c !== 'ultracode')
-    const at = levels.findIndex(c => c === eff.level)
-    const above = isPicking && at >= 0 ? levels.slice(0, at) : []
-    const below = isPicking ? [...levels.slice(at + 1), 'ultracode' as const] : []
     const choiceButton = (choice: (typeof EFFORT_CHOICES)[number]) => {
       const isUltraOff = choice === 'ultracode' && eff.isUltra
       // Options are plain text: the badge's inverse colors need its background, so max is drawn in `error`.
@@ -1275,7 +1287,7 @@ export const register: Register = on => {
       )
     }
     const effortColumn = (
-      <Box key="effort-col" flexDirection="column" alignItems="flex-end" flexShrink={0}>
+      <Box key="effort-col" flexDirection={pickerDirection} alignItems="flex-end" flexShrink={0}>
         {above.map(choiceButton)}
         <Button
           key="effort"
@@ -1300,18 +1312,13 @@ export const register: Register = on => {
       </Box>
     )
 
-    // The model picker works the same way: smaller models above the badge, larger ones below.
-    const family = modelFamily(modelName ?? s.model)
-    const mAt = MODEL_CHOICES.findIndex(c => c === family)
-    const mAbove = isModelPicking && mAt >= 0 ? MODEL_CHOICES.slice(0, mAt) : []
-    const mBelow = isModelPicking ? MODEL_CHOICES.slice(mAt + 1) : []
     const modelButton = (choice: ModelChoice) => (
       <Button key={`model-${choice}`} plain label={choice} onPress={() => pickModel($, choice)}>
         <Text color="text">{`◇ ${modelLabel(choice)}  `}</Text>
       </Button>
     )
     const modelColumn = (
-      <Box key="model-col" flexDirection="column" alignItems="flex-end" flexShrink={0}>
+      <Box key="model-col" flexDirection={pickerDirection} alignItems="flex-end" flexShrink={0}>
         {mAbove.map(modelButton)}
         <Button
           key="model"
@@ -1338,11 +1345,14 @@ export const register: Register = on => {
     )
 
     if (isCompact) {
+      // Choices in a row take the line: the meter is back once the picker closes.
       return (
-        <Box key="context-meter" flexDirection="row" justifyContent="space-between">
-          <Box key="left" flexGrow={1} flexShrink={1} overflow="hidden">
-            {meter}
-          </Box>
+        <Box key="context-meter" flexDirection="row" justifyContent="space-between" overflow="hidden">
+          {isPickerRow ? null : (
+            <Box key="left" flexGrow={1} flexShrink={1} overflow="hidden">
+              {meter}
+            </Box>
+          )}
           {pickers}
         </Box>
       )

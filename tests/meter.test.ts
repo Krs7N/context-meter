@@ -290,6 +290,37 @@ test('the desktop picture draws every cell of every outfit', async () => {
   expect(bare).not.toMatch(/<rect x="(32|64)" y="0" width="8" height="16"/)
 })
 
+test('an open picker counts in the band’s height', async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  mock.clock(on, { now: 600_000 })
+  await $.session.start(START)
+  // bare Clawd and the stats fit 8 rows with the border
+  const ui = await band($, 140, false, 8)
+  expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeDefined()
+  // the effort picker is the badge and six choices: 9 rows with the border, more than the slot
+  await ui.press({ key: 'effort' })
+  expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /25%/ })).toBeDefined()
+  for (const choice of ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']) {
+    expect(await ui.find({ key: `pick-${choice}` })).toBeDefined()
+  }
+  await ui.unmount()
+})
+
+test('a slot too short for a picker column gets its choices in a row', async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  mock.clock(on, { now: 600_000 })
+  await $.session.start(START)
+  const ui = await band($, 140, false, 3)
+  expect((await ui.find({ key: 'effort-col' }))?.props.flexDirection).toBe('column')
+  await ui.press({ key: 'effort' })
+  expect((await ui.find({ key: 'effort-col' }))?.props.flexDirection).toBe('row')
+  expect(await ui.find({ key: 'pick-ultracode' })).toBeDefined()
+  await ui.unmount()
+})
+
 test('narrow terminal gets the one-line meter without the mascot', async ($, on) => {
   on('session.usage', () => ({ value: usage(50_000, 25) }))
   on('session.start', () => ({ cwd: '.' }))
