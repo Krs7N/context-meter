@@ -9,6 +9,7 @@ import {
   duration,
   outfitFor,
   effortBadge,
+  effortRefusal,
   fillColor,
   fmtTokens,
   litKey,
@@ -432,6 +433,25 @@ describe('effort', () => {
     ).toEqual({ level: 'medium', isUltra: false })
     // a prompt that merely mentions it changes nothing
     expect(parseEffortOutput('emphasize the effort if it is max / or ultra code')).toEqual({})
+    // what is in force when it is not what was asked: a cap, the environment, a kept level
+    expect(
+      parseEffortOutput(
+        "Effort 'max' exceeds the cap for claude-opus-5-5 set by your settings or organization; set to 'high' instead: Thorough",
+      ),
+    ).toEqual({ level: 'high' })
+    expect(parseEffortOutput('CLAUDE_CODE_EFFORT_LEVEL=medium overrides this session — clear it and max takes over')).toEqual({
+      level: 'medium',
+    })
+    expect(parseEffortOutput('Kept effort level as xhigh')).toEqual({ level: 'xhigh' })
+  })
+
+  test('knows a refusal from /effort', async () => {
+    expect(effortRefusal('Ultracode needs dynamic workflows enabled (see /config). Valid options are: low, max')).toBeDefined()
+    expect(effortRefusal("Ultracode isn't available on claude-haiku-5-5. Valid options are: low, high")).toBeDefined()
+    expect(effortRefusal('Failed to set effort level: settings are read-only')).toBeDefined()
+    expect(effortRefusal("max is session-scoped and won't reach the remote process. Use low, medium, high, or xhigh instead.")).toBeDefined()
+    expect(effortRefusal('Set effort level to max (this session only): Maximum capability')).toBeUndefined()
+    expect(effortRefusal('')).toBeUndefined()
   })
 })
 
@@ -489,6 +509,39 @@ test('a pick shows even when /effort prints nothing the mod can read', async ($,
   await ui.press({ key: 'effort' })
   await ui.press({ key: 'pick-max' })
   expect(await ui.find({ type: 'Text', text: ' ▲ MAX ' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an effort pick /effort refuses or caps shows what is in force', async ($, on) => {
+  const refusal = 'Ultracode needs dynamic workflows enabled (see /config). Valid options are: low, medium, high, xhigh, max'
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.start', () => ({ cwd: '.' }))
+  on('command.run', { command: 'effort' }, ($, e) =>
+    e.args === 'ultracode'
+      ? ({ text: refusal } as never)
+      : ({
+          text: `Effort '${e.args}' exceeds the cap for claude-opus-5-5 set by your settings or organization; set to 'high' instead: Thorough`,
+        } as never),
+  )
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined } as never
+  })
+  mock.clock(on, { now: 600_000 })
+  await $.session.start(START)
+  const ui = await band($, 140)
+  // refused: no ultracode badge, no top hat, and the reason
+  await ui.press({ key: 'effort' })
+  await ui.press({ key: 'pick-ultracode' })
+  expect(await ui.find({ type: 'Text', text: /ULTRACODE/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /▄▄█████▄▄/ })).toBeUndefined()
+  expect(toasts).toEqual([refusal])
+  // capped: the level in force
+  await ui.press({ key: 'effort' })
+  await ui.press({ key: 'pick-max' })
+  expect(await ui.find({ type: 'Text', text: /MAX/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '● high' })).toBeDefined()
   await ui.unmount()
 })
 

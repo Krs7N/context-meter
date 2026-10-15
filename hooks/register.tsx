@@ -585,17 +585,44 @@ export function effortBadge(e: Effort): EffortBadge | undefined {
 export const EFFORT_CHOICES = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const
 
 /**
- * What `/effort` printed, read back: "Set effort level to max (…)",
- * "Ultracode on (this session only): … Effort stays medium.", "… · Ultracode off".
+ * What `/effort` printed, read back as what is in force: "Set effort level to max (…)",
+ * "Ultracode on (this session only): … Effort stays medium.", "… · Ultracode off"; and where
+ * that is not what was asked, the level that holds: an environment variable's
+ * ("CLAUDE_CODE_EFFORT_LEVEL=high overrides this session …"), a cap's ("… set to 'high'
+ * instead"), the one kept ("Kept effort level as high"). A refused ultracode is off.
  */
 export function parseEffortOutput(text: string): Partial<Effort> {
   const found: Partial<Effort> = {}
-  const level = /effort level to (\w+)/i.exec(text) ?? /effort stays (\w+)/i.exec(text)
-  const word = level?.[1]
-  if (word) found.level = word.toLowerCase()
+  const level =
+    /CLAUDE_CODE_EFFORT_LEVEL=(\w+) (?:overrides|still controls)/i.exec(text) ??
+    /set to '(\w+)' instead/i.exec(text) ??
+    /exceeds the cap for .*?; using '(\w+)'/i.exec(text) ??
+    /effort level to (\w+)/i.exec(text) ??
+    /effort stays (\w+)/i.exec(text) ??
+    /kept effort level as (\w+)/i.exec(text)
+  const word = level?.[1]?.toLowerCase()
+  if (word && word !== 'auto') found.level = word
   if (/ultracode on\b/i.test(text)) found.isUltra = true
-  else if (/ultracode off\b/i.test(text)) found.isUltra = false
+  else if (/ultracode off\b/i.test(text) || /^ultracode (?:needs|isn't available)/i.test(text)) found.isUltra = false
   return found
+}
+
+/**
+ * The output of a `/effort` that did not take effect as asked, as Claude Code words it:
+ * refused (ultracode unavailable, a failure, a session-only level a remote process cannot
+ * take), kept, capped, or overridden by `CLAUDE_CODE_EFFORT_LEVEL`. Undefined for a plain success.
+ */
+export function effortRefusal(text: string | undefined): string | undefined {
+  const t = text?.trim() ?? ''
+  const isRefused =
+    /^ultracode (?:needs|isn't available)/i.test(t) ||
+    /^failed to set effort level/i.test(t) ||
+    /^not applied:/i.test(t) ||
+    /^kept effort level as/i.test(t) ||
+    /won't reach the remote process/i.test(t) ||
+    /exceeds the cap for/i.test(t) ||
+    /CLAUDE_CODE_EFFORT_LEVEL=\w+ (?:overrides|still controls)/i.test(t)
+  return isRefused ? t : undefined
 }
 
 /**
@@ -716,8 +743,12 @@ async function pickEffort($: EngineInterface, args: string): Promise<void> {
   await update($, isPickerOpen, () => false)
   try {
     const result = await $.command.run({ command: 'effort', args })
+    // what is in force, where the output says; a pick that did not take as asked also says why
     const isApplied = await applyEffortOutput($, result.text)
-    if (!isApplied) {
+    const refusal = effortRefusal(result.text)
+    if (refusal !== undefined) {
+      await $.ui.toast(refusal)
+    } else if (!isApplied) {
       const asked = parseEffortArgs(args)
       if (asked) await update($, effort, old => ({ ...old, ...asked }))
       $.ui.log(`context-meter: /effort ${args} printed nothing readable; showing what was asked`, { to: 'debug' })
