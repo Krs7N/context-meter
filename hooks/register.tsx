@@ -180,10 +180,11 @@ export function clawdRows(o: { outfit: Outfit; isShut: boolean; typing?: number;
 }
 
 /**
- * Theme colours as Claude Code's dark theme draws them, for the Svg Clawd: an Svg is
- * drawn isolated from the page, so theme keys mean nothing inside it. Raw colours pass through.
+ * Theme colours as Claude Code's dark and light themes draw them, for the Svg Clawd: an Svg
+ * is drawn isolated from the page, so theme keys mean nothing inside it. The page's light or
+ * dark picks the set, so he looks as the terminal draws him in that theme. Raw colours pass through.
  */
-const SVG_COLORS: Record<string, string> = {
+const SVG_DARK: Record<string, string> = {
   claude: '#d77757',
   suggestion: '#b1b9f9',
   success: '#4eba65',
@@ -194,6 +195,18 @@ const SVG_COLORS: Record<string, string> = {
   inverseText: '#000000',
   inactive: '#999999',
   subtle: '#505050',
+}
+const SVG_LIGHT: Record<string, string> = {
+  claude: '#d77757',
+  suggestion: '#5769f7',
+  success: '#2c7a39',
+  warning: '#966c1e',
+  error: '#ab2b3f',
+  merged: '#8700ff',
+  text: '#000000',
+  inverseText: '#ffffff',
+  inactive: '#666666',
+  subtle: '#afafaf',
 }
 /** One terminal cell in the Svg, in CSS pixels: twice as tall as wide, as a terminal draws it. */
 const CELL_W = 8
@@ -218,28 +231,34 @@ const QUADS: Record<string, readonly [number, number, number, number]> = {
   '▞': [0, 1, 1, 0],
 }
 
-const svgColor = (c: string | undefined) => (c === undefined ? undefined : (SVG_COLORS[c] ?? c))
+/** A colour in the Svg: the dark theme's as the attribute, and for a theme key the class that follows the page. */
+type SvgPaint = { color: string; key?: string }
+
+const svgPaint = (c: string): SvgPaint => {
+  const dark = SVG_DARK[c]
+  return dark === undefined ? { color: c } : { color: dark, key: c }
+}
+const fillOf = (p: SvgPaint) => `fill="${p.color}"${p.key ? ` class="f-${p.key}"` : ''}`
+const strokeOf = (p: SvgPaint) => `stroke="${p.color}"${p.key ? ` class="s-${p.key}"` : ''}`
 const escapeXml = (s: string) => s.replace(/[<>&"']/g, ch => `&#${ch.charCodeAt(0)};`)
 
-/**
- * The theme's `text` colour turns dark on a light page, as the terminal's light theme draws
- * it (the straws sit on the page itself). Classes, since a CSS rule outranks the fill attribute.
- */
-const SVG_STYLE =
-  '<style>.tf{fill:#ffffff}.ts{stroke:#ffffff}@media (prefers-color-scheme: light){.tf{fill:#000000}.ts{stroke:#000000}}</style>'
+/** The theme classes, dark first and light on a light page (a CSS rule outranks the attribute). */
+const SVG_STYLE = (() => {
+  const rules = (set: Record<string, string>) =>
+    Object.entries(set)
+      .map(([k, v]) => `.f-${k}{fill:${v}}.s-${k}{stroke:${v}}`)
+      .join('')
+  return `<style>${rules(SVG_DARK)}@media (prefers-color-scheme: light){${rules(SVG_LIGHT)}}</style>`
+})()
 
-/**
- * One glyph of a cell at (x, y) as Svg markup: blocks as rects, the line-drawing ones as
- * strokes. `isText` marks the theme's `text` colour, which follows the page's light or dark.
- */
-function glyphSvg(ch: string, x: number, y: number, fill: string, isBold: boolean, isText = false): string {
+/** One glyph of a cell at (x, y) as Svg markup: blocks as rects, the line-drawing ones as strokes. */
+function glyphSvg(ch: string, x: number, y: number, paint: SvgPaint, isBold: boolean): string {
   const w = CELL_W
   const h = CELL_H
-  const fillClass = isText ? ' class="tf"' : ''
   const rect = (rx: number, ry: number, rw: number, rh: number) =>
-    `<rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" fill="${fill}"${fillClass}/>`
+    `<rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" ${fillOf(paint)}/>`
   const stroke = (d: string, width: number) =>
-    `<path d="${d}" fill="none" stroke="${fill}" stroke-width="${width}" stroke-linecap="round"${isText ? ' class="ts"' : ''}/>`
+    `<path d="${d}" fill="none" ${strokeOf(paint)} stroke-width="${width}" stroke-linecap="round"/>`
   const q = QUADS[ch]
   if (q) {
     const [lt, rt, lb, rb] = q
@@ -266,33 +285,30 @@ function glyphSvg(ch: string, x: number, y: number, fill: string, isBold: boolea
     case ')':
       return stroke(`M${x + 2} ${y + 3} Q${x + w - 1} ${y + h / 2} ${x + 2} ${y + h - 3}`, isBold ? 2 : 1.5)
     case '●':
-      return `<circle cx="${x + w / 2}" cy="${y + h / 2}" r="${w * 0.35}" fill="${fill}"${fillClass}/>`
+      return `<circle cx="${x + w / 2}" cy="${y + h / 2}" r="${w * 0.35}" ${fillOf(paint)}/>`
     default:
-      return `<text x="${x + w / 2}" y="${y + h * 0.75}" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="${h * 0.8}"${isBold ? ' font-weight="bold"' : ''} fill="${fill}"${fillClass}>${escapeXml(ch)}</text>`
+      return `<text x="${x + w / 2}" y="${y + h * 0.75}" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="${h * 0.8}"${isBold ? ' font-weight="bold"' : ''} ${fillOf(paint)}>${escapeXml(ch)}</text>`
   }
 }
 
 /**
  * Clawd's rows (`clawdRows`) as one Svg, for surfaces that draw Text in a page font: there
  * the block glyphs leave gaps between lines and the cells lose their width. Every cell is
- * drawn as the terminal would fill it, so he looks the same.
+ * drawn as the terminal would fill it, so he looks the same: what a glyph leaves empty (his
+ * eyes, as in the welcome banner) shows what is behind him.
  */
 export function clawdSvg(rows: readonly (readonly ClawdPiece[])[]): { source: string; width: number; height: number } {
   const parts: string[] = []
-  const eyes = CLAWD.eyesOpen.trim()
   rows.forEach((row, r) => {
     let col = 0
     for (const p of row) {
-      const fill = svgColor(p.color) ?? SVG_COLORS.text ?? '#ffffff'
-      // His open eyes are the empty quarters of ▛ and ▜: black behind them, so they are not
-      // the page's colour (white on a light page).
-      const isEyes = p.text === eyes
+      const paint = svgPaint(p.color ?? 'text')
+      const bg = p.bg === undefined ? undefined : svgPaint(p.bg)
       for (const ch of p.text) {
         const x = col * CELL_W
         const y = r * CELL_H
-        const bg = svgColor(p.bg) ?? (isEyes && (ch === '▛' || ch === '▜') ? SVG_COLORS.inverseText : undefined)
-        if (bg) parts.push(`<rect x="${x}" y="${y}" width="${CELL_W}" height="${CELL_H}" fill="${bg}"/>`)
-        parts.push(glyphSvg(ch, x, y, fill, p.bold === true, p.color === 'text'))
+        if (bg) parts.push(`<rect x="${x}" y="${y}" width="${CELL_W}" height="${CELL_H}" ${fillOf(bg)}/>`)
+        parts.push(glyphSvg(ch, x, y, paint, p.bold === true))
         col++
       }
     }

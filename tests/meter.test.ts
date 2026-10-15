@@ -276,14 +276,15 @@ test('the desktop picture draws every cell of every outfit', async () => {
   }
   const asleep = clawdSvg(clawdRows({ outfit: 'none', isShut: true, zzz: ' zZz     ' }))
   expect(asleep.source).toContain('>Z</text>')
-  // the theme's text colour (straws, rims) follows a light page
-  expect(clawdSvg(clawdRows({ outfit: 'cap-bottles', isShut: false })).source).toContain('class="ts"')
-  // open eyes are black on any page: the ▛ and ▜ cells (columns 4 and 8 of his face row) sit on black
-  const face = clawdSvg(clawdRows({ outfit: 'none', isShut: false })).source
-  expect(face).toContain('<rect x="32" y="0" width="8" height="16" fill="#000000"/>')
-  expect(face).toContain('<rect x="64" y="0" width="8" height="16" fill="#000000"/>')
-  // the same glyphs in his body (the arms' gaps) stay see-through
-  expect(face).not.toContain('<rect x="24" y="16" width="8" height="16" fill="#000000"/>')
+  // theme colours follow the page: the dark theme's, and the light theme's on a light page
+  const face = clawdSvg(clawdRows({ outfit: 'cap-bottles', isShut: false })).source
+  expect(face).toContain('class="s-text"') // the straws
+  expect(face).toContain('@media (prefers-color-scheme: light){')
+  expect(face).toMatch(/prefers-color-scheme: light\)\{.*\.f-inverseText\{fill:#ffffff\}/)
+  // as in the welcome banner, his open eyes are what ▛ and ▜ leave empty: the cells
+  // (columns 4 and 8 of his face row) get no background, so the page shows through
+  const bare = clawdSvg(clawdRows({ outfit: 'none', isShut: false })).source
+  expect(bare).not.toMatch(/<rect x="(32|64)" y="0" width="8" height="16"/)
 })
 
 test('narrow terminal gets the one-line meter without the mascot', async ($, on) => {

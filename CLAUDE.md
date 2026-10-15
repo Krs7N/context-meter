@@ -52,7 +52,8 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
 - **Desktop differs from the terminal.**
   - Desktop draws `Text` as a span in its page font unless the Text has `mono`, so the render hook wraps `Text` to add `mono` off the terminal.
   - Clawd is drawn as one `Svg` (`clawdSvg`, built from the same `clawdRows` cells). Block glyphs leave gaps between lines in a page.
-  - An Svg is isolated from the theme, so colours are hex (`SVG_COLORS`); only `text` follows light or dark, through `prefers-color-scheme`.
+  - An Svg is isolated from the theme, so colours are hex: Claude Code's dark theme (`SVG_DARK`), switched to its light theme (`SVG_LIGHT`) on a light page through `prefers-color-scheme`.
+  - Clawd must match Claude Code's welcome banner: what a glyph leaves empty (his open eyes in `▛`/`▜`) shows the background on both surfaces. So his eyes are white on a light theme, as the banner's are; don't fill them.
   - `Button`s are native buttons there even with `plain`.
   - Keep the terminal tree unchanged when changing the Desktop drawing; the tests pin both.
   - To look at the Svg, dump `clawdSvg(...).source` from a scratch test and screenshot it with headless Chromium.
