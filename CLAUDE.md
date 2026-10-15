@@ -41,6 +41,7 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
   - `prompt.submit`: reads a typed `/effort …`.
   - `command.run`: reads back what `/effort` and `/model` set.
   - `ui.render` `{ component: 'AbovePrompt' }`: the band.
+- **Only where it is drawn.** `isDrawn` says whether a terminal or Desktop draws the band. `session.start` sets it from `e.surface`, `session.attach`/`session.detach` keep it up to date, and a render while it is false sets it. Without one, the ticker, its polls and the readings do not run (`claude -p`, the SDK, VS Code).
 - **One timer.** Every animation (count-up, Clawd's frames, blink, sleep) and the 1.4 s polls (saved effort, `$.session.model()`) run on a single `$.clock.every(100)` ticker (`startTicker`/`onTick`). A hook's own `sleep` loops die with its dispatch budget, so don't add them.
 - **Render.** The band redraws when an atom it read changes; `frame` changes every 0.7 s, so the band redraws at least that often. It picks the one-line layout below 72 columns or when the full band is taller than `props.maxRows`, and otherwise draws the full layout: Clawd (`clawdRows`, 13 cells wide in every outfit) beside three stats rows. Elements come from `$.ui.resolve(e)`, never globals.
 

@@ -1022,8 +1022,33 @@ let ticker: { cancel: () => void } | undefined
 let subtick = 0
 let countStep = TWEEN_STEPS
 
+/** The surfaces the band is drawn on: AbovePrompt is raised on these alone. */
+const BAND_SURFACES: ReadonlySet<string> = new Set(['terminal', 'desktop'])
+
+/**
+ * Whether something draws the band. Where nothing does (`claude -p`, the Agent SDK, VS Code,
+ * Claude Code Desktop before it attaches), the timer, its polls and the readings do not run.
+ */
+let isDrawn = true
+
+/** A surface that draws the band is attached; when the roster cannot be read, assume one is. */
+async function isBandSurfaceAttached($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.session.surfaces()).some(s => BAND_SURFACES.has(s))
+  } catch {
+    return true
+  }
+}
+
+/** The band's work starts: the timer, a full reading, the model and the effort. */
+async function wake($: EngineInterface): Promise<void> {
+  startTicker($)
+  await Promise.all([refresh($), refreshEffort($), markActive($), refreshModel($)])
+  await pollSavedEffort($)
+}
+
 function startTicker($: EngineInterface): void {
-  if (ticker) return
+  if (ticker || !isDrawn) return
   try {
     ticker = $.clock.every(TWEEN_MS, () => {
       void onTick($)
@@ -1106,10 +1131,32 @@ export const register: Register = on => {
     } catch {
       // drawing state is best effort
     }
-    startTicker($)
-    await Promise.all([refresh($), refreshEffort($), markActive($), refreshModel($)])
-    await pollSavedEffort($)
+    // The REPL starts on the terminal; `-p` and the SDK start drawing nowhere, and Claude Code
+    // Desktop attaches later (session.attach).
+    isDrawn = (e.surface !== null && BAND_SURFACES.has(e.surface)) || (await isBandSurfaceAttached($))
+    if (isDrawn) await wake($)
     return next(e)
+  })
+
+  // A client that draws the band joined (Claude Code Desktop attaches after an SDK-hosted
+  // start): the band's work starts now, from a fresh reading.
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    if (BAND_SURFACES.has(e.surface) && !isDrawn) {
+      isDrawn = true
+      await wake($)
+    }
+    return result
+  })
+
+  // The last client that drew the band left: its work stops until one attaches again.
+  on('session.detach', async ($, e, next) => {
+    const result = await next(e)
+    if (BAND_SURFACES.has(e.surface) && !(await isBandSurfaceAttached($))) {
+      isDrawn = false
+      stopTicker()
+    }
+    return result
   })
 
   // `/model`, typed or picked from the badge: read the model back once it ran.
@@ -1125,8 +1172,10 @@ export const register: Register = on => {
   // Also (re)starts the timer: a /clear ends the session without a new session.start.
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
-    startTicker($)
-    await Promise.all([refresh($, { breakdown: false }), refreshEffort($), markActive($)])
+    if (isDrawn) {
+      startTicker($)
+      await Promise.all([refresh($, { breakdown: false }), refreshEffort($), markActive($)])
+    }
     return result
   })
 
@@ -1134,7 +1183,7 @@ export const register: Register = on => {
   // trend point and a fresh breakdown. Subagents' turns are theirs.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined) await refresh($, { isTurnEnd: true })
+    if (e.agentId === undefined && isDrawn) await refresh($, { isTurnEnd: true })
     return result
   })
 
@@ -1147,7 +1196,7 @@ export const register: Register = on => {
     const result = yield* next(e)
     await noted
     const u = result.usage
-    if (isMain && u) {
+    if (isMain && u && isDrawn) {
       await refresh($, {
         breakdown: false,
         stepTokens: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
@@ -1247,6 +1296,16 @@ export const register: Register = on => {
       read($, model),
       read($, isModelPickerOpen),
     ])
+    // A surface draws the band though none was seen to attach: its work starts, outside this
+    // render (a render never writes state).
+    if (!isDrawn) {
+      isDrawn = true
+      try {
+        $.clock.after(0, () => void wake($))
+      } catch {
+        // the next measure or prompt starts it
+      }
+    }
     if (s === null) return next(e)
     // the clock, not the reading's time, so the session's length runs between readings
     const now = await $.clock.now().catch(() => s.at)

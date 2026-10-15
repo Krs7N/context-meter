@@ -123,7 +123,7 @@ Clawd as the Claude Code welcome banner draws him, in the frame's left corner, s
 
 ## The timer
 
-All animation (mascot frames, count-up) runs on one `$.clock.every(100 ms)` interval (`startTicker`). Work that a hook starts with `sleep` loops dies when that hook's dispatch ends, because each hook has a time budget and sleeps count against it. An engine interval runs until it is cancelled or the module reloads. `session.start` starts the interval and lands any count-up a reload interrupted. `session.measure`, `prompt.submit` and `/effort` restart it if it is missing, because a `/clear` fires no new `session.start`. `session.end` stops it, except on `/clear` and `/resume`, which keep it and start the meter over 0.3 s later.
+All animation (mascot frames, count-up) runs on one `$.clock.every(100 ms)` interval (`startTicker`). Work that a hook starts with `sleep` loops dies when that hook's dispatch ends, because each hook has a time budget and sleeps count against it. An engine interval runs until it is cancelled or the module reloads. `session.start` starts the interval and lands any count-up a reload interrupted. `session.measure`, `prompt.submit` and `/effort` restart it if it is missing, because a `/clear` fires no new `session.start`. `session.end` stops it, except on `/clear` and `/resume`, which keep it and start the meter over 0.3 s later. It runs only while a terminal or Claude Code Desktop draws the band.
 
 Every `/effort` writes a line to the debug log (`claude --debug`): `context-meter: /effort <args> → "<output>" (applied: …)`. If `/effort` was given a level and the mod could not read its output, the line also goes to the transcript.
 
@@ -131,7 +131,8 @@ Every `/effort` writes a line to the debug log (`claude --debug`): `context-mete
 
 | Event | What happens |
 | --- | --- |
-| `session.start` | first reading; starts the mascot's animation loop |
+| `session.start` | first reading; starts the mascot's animation loop where a terminal draws the band (the REPL); `-p` and SDK runs, which draw nothing, run none of the band's work |
+| `session.attach` / `session.detach` | Claude Code Desktop joining starts the band's work with a fresh reading; the last drawing client leaving stops it |
 | `turn.complete` | the end of a main-thread turn: a reading with breakdown, the turn's growth and a trend point |
 | `session.measure` | a plain reading, after each turn and whenever a rate-limit window moves (mid-turn too) |
 | `turn.step` | each main-thread request: its effort level, then a live reading from the response's own usage |

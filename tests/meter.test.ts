@@ -396,6 +396,56 @@ describe('nothing is cut mid-figure', () => {
   })
 })
 
+test('where nothing draws the band, nothing runs for it until a surface attaches', async ($, on) => {
+  let readings = 0
+  let polls = 0
+  on('session.usage', () => {
+    readings++
+    return { value: usage(50_000, 25) }
+  })
+  on('session.model', () => {
+    polls++
+    return { value: 'claude-opus-5-5' } as never
+  })
+  on('session.surfaces', () => ({ value: [] }) as never)
+  on('session.start', () => ({ cwd: '.' }))
+  on('session.attach', ($, e) => ({ clientId: e.clientId }))
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  on('turn.complete', () => ({ text: '' }))
+  on('turn.step', answer(() => 60_000))
+  const clock = mock.clock(on, { now: 600_000 })
+  // `claude -p` or the SDK: nothing draws
+  await $.session.start({ cwd: '.', surface: null, isInteractive: false })
+  await request($, 'high')
+  await turnEnds($, usage(60_000, 30))
+  await clock.advance(5000)
+  expect(readings).toBe(0)
+  expect(polls).toBe(0)
+  // Claude Code Desktop attaches: a fresh reading, and the timer's polls start
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  expect(readings).toBeGreaterThan(0)
+  await clock.advance(5000)
+  expect(polls).toBeGreaterThan(0)
+  const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(140) })
+  expect(await ui.find({ type: 'Text', text: '50.0k' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a surface that draws the band unannounced starts its work', async ($, on) => {
+  on('session.usage', () => ({ value: usage(50_000, 25) }))
+  on('session.surfaces', () => ({ value: [] }) as never)
+  on('session.start', () => ({ cwd: '.' }))
+  // the engine's own band, drawn while the mod has nothing to draw
+  on('ui.render', ($, e) => $.ui.resolve(e).Box({}))
+  const clock = mock.clock(on, { now: 600_000 })
+  await $.session.start({ cwd: '.', surface: null, isInteractive: false })
+  // no session.attach was seen, yet a surface asks for the band
+  const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(140) })
+  await clock.advance(1000)
+  expect(await ui.find({ type: 'Text', text: '50.0k' })).toBeDefined()
+  await ui.unmount()
+})
+
 test('narrow terminal gets the one-line meter without the mascot', async ($, on) => {
   on('session.usage', () => ({ value: usage(50_000, 25) }))
   on('session.start', () => ({ cwd: '.' }))
