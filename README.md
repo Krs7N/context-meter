@@ -181,4 +181,4 @@ claude plugin test context-meter
 
 Type-check: once Claude Code has loaded the mod (`claude --plugin-dir ./context-meter`), `.claude-plugin/types/` holds the engine's types (gitignored) and `npx -y -p typescript@5.6.3 tsc -p context-meter` works.
 
-Releasing: bump `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, add a `CHANGELOG.md` entry, commit, merge to `main` and push, then tag `vX.Y.Z` and publish the GitHub release. Installed copies pick it up with `/plugin update context-meter`.
+Releasing: bump `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, add a `CHANGELOG.md` entry, commit to `main` and push, then publish the GitHub release (`gh release create vX.Y.Z --target main`, which creates the tag). Installed copies pick it up with `/plugin update context-meter`.

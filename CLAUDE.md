@@ -82,11 +82,12 @@ Helpers in the test file:
 
 - The version lives in **both** `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`. The user names each version bump, so don't bump it unasked.
 - `CHANGELOG.md` collects changes under `## Unreleased` until a release. The README screenshot is `docs/context-meter.png`, which the user supplies.
-- Release steps: bump both manifests, move the changelog section under the version, commit, merge to `main`, tag `vX.Y.Z`, then `gh release create`.
+- Release steps: bump both manifests, move the changelog section under the version, commit on `main` and push, then `gh release create vX.Y.Z --target main --title vX.Y.Z`, which creates the tag. Notes: `Everything since **<previous version>**.`, then the changelog section under `### X.Y.Z — <date>`. No workflow publishes releases: a push alone only updates the marketplace copy that `/plugin update` reads.
 - Design history: `docs/superpowers/specs/` (the audit, its engine facts and the decision guide for what comes next), `docs/superpowers/plans/` and `docs/superpowers/audits/` (the open low and trivial findings).
 
 ## Working with the user
 
 - Replies: terse.
+- Branches: none. Work and commit on `main`.
 - Visuals: one tweak at a time, so they can judge each change.
 - Pushing: the repo is public, so ask before pushing.
