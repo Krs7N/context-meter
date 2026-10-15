@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4 — 2026-10-15
+
+- A changed number is highlighted by the way it moved: green where it went up, red where it went down, instead of blue either way. The same goes for the percent's `▲`/`▼`, the bar's newly filled part (green), the `window … → …` note, and a turn's growth by its sign (`+` green, `−` red).
+- Arrows elsewhere take the same colours, not bold: the trend's ends (`12→42%`) and the compaction note (`compacted 182.0k → 31.0k`, red).
+
 ## 0.3.3 — 2026-10-15
 
 - Claude Code Desktop draws the band again. Desktop runs its own bundled Claude Code (2.1.295), whose Text refuses the `mono` prop, so it drew no band at all. The monospaced face is now set only on engines that take it (2.1.299 or later); older engines, or ones whose version is unknown, get the page font instead.

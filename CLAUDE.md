@@ -30,7 +30,7 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
   - **live:** taken after each main-loop request (`turn.step`), with tokens from that response's usage. It never sets `lastDelta` and never adds a trend point.
   - **turn end:** a main-loop `turn.complete`. It computes `lastDelta = tokens − turnBase`, moves `turnBase`, adds a trend point, and only then reads the breakdown. Never take turn ends from `session.measure`: the engine raises one right after each `turn.complete`, but also mid-turn whenever a rate-limit window moves a whole point, and then `changed` names the context too.
 
-  `changedKeys` / `fromValues` drive the change highlight (`changed`, `changedTick`, about 10 s) and the 6 s count-up (`from`, `tweenStep`). A window change (a model switch) is its own key (`window`), never `percent`.
+  `changedKeys` / `fromValues` drive the change highlight (`changed`, `changedTick`, about 10 s) and the 6 s count-up (`from`, `tweenStep`). A window change (a model switch) is its own key (`window`), never `percent`. `moveOf` gives each changed key its way (`up`/`down`; a turn's growth by its sign), which `MOVE_COLOR` turns into green (`success`) or red (`error`); `HL_COLOR` is only the fallback for an unknown way. Arrows that are not fresh changes (the trend's ends, the compaction note) take the same colours with `bold: false`.
 - **Hooks.**
   - `session.start`: first reading, starts the ticker, and lands any count-up that a reload interrupted.
   - `turn.complete` (main loop): the turn end.

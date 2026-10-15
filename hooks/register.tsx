@@ -421,8 +421,11 @@ export function meterRuns(args: {
   return runs.filter(r => r.text.length > 0)
 }
 
-/** A piece of a stats row: plain (dim), highlighted (`hl`, a fresh change), or in a colour of its own (a warning). */
-type Seg = { text: string; hl?: boolean; color?: string }
+/**
+ * A piece of a stats row: plain (dim), highlighted (`hl`, a fresh change, in the colour of
+ * its move), or in a colour of its own (a warning, a move that is not fresh, `bold: false`).
+ */
+type Seg = { text: string; hl?: boolean; color?: string; bold?: boolean }
 
 const isPlain = (seg: Seg) => !seg.hl && seg.color === undefined
 
@@ -983,6 +986,34 @@ export function toSnapshot(
   return next
 }
 
+/** A fresh change's colour by the way it went: green where the number rose, red where it fell. */
+const MOVE_COLOR = { up: 'success', down: 'error' } as const
+
+/**
+ * Which way a changed number went since the last reading: `up`, `down`, or undefined where
+ * it did not move or its old value is unknown. A turn's growth (`delta`) goes by its sign,
+ * a new window from the one before.
+ */
+export function moveOf(s: Snapshot, key: string): 'up' | 'down' | undefined {
+  let from = s.from[key]
+  let to: number | undefined
+  if (key === 'delta') {
+    from = 0
+    to = s.lastDelta
+  } else if (key === 'window') {
+    from = s.windowFrom
+    to = s.window
+  } else if (key === 'percent') {
+    from = s.prevPercent ?? from
+    to = s.percent
+  } else if (key === 'tokens') to = s.tokens
+  else if (key === 'headroom') to = s.compactAt !== undefined && s.tokens !== undefined ? Math.max(0, s.compactAt - s.tokens) : undefined
+  else if (key === 'usd') to = s.usd
+  else if (key.startsWith('limit:')) to = s.limits.find(l => `limit:${l.kind}` === key)?.percentUsed
+  if (from === undefined || to === undefined || from === to) return undefined
+  return to > from ? 'up' : 'down'
+}
+
 /**
  * Each changed number's old value, the start of its count-up. A finished turn's growth
  * counts on from the "this turn" figure the live readings showed, else from 0.
@@ -1503,6 +1534,12 @@ export const register: Register = (on, options) => {
     // A changed number stays highlighted for HIGHLIGHT_TICKS ticks (about 10 s).
     const isFresh = tick - s.changedTick < HIGHLIGHT_TICKS
     const hl = (key: string) => isFresh && s.changed.includes(key)
+    // Green where the number rose, red where it fell; HL_COLOR where the way is unknown.
+    const hlColor = (key: string): string => {
+      const move = moveOf(s, key)
+      return move === undefined ? HL_COLOR : MOVE_COLOR[move]
+    }
+    const hlSeg = (key: string, text: string): Seg => (hl(key) ? { text, hl: true, color: hlColor(key) } : { text })
     const runs = meterRuns({
       percent: shown('percent', fillPercent),
       prevPercent: hl('percent') ? s.prevPercent : undefined,
@@ -1516,7 +1553,7 @@ export const register: Register = (on, options) => {
       kind === 'old'
         ? { color: fill }
         : kind === 'new'
-          ? { color: HL_COLOR, bold: true }
+          ? { color: MOVE_COLOR.up, bold: true }
           : kind === 'mark'
             ? { color: 'warning', bold: true }
             : { dimColor: true }
@@ -1537,7 +1574,7 @@ export const register: Register = (on, options) => {
         <Box key="tokens" flexDirection="row" flexShrink={0} marginLeft={1}>
           <Text
             bold={over !== undefined || hl('tokens')}
-            color={over !== undefined ? 'error' : hl('tokens') ? HL_COLOR : undefined}
+            color={over !== undefined ? 'error' : hl('tokens') ? hlColor('tokens') : undefined}
             dimColor={over === undefined && !hl('tokens')}
           >
             {fmtTokens(shown('tokens', s.tokens))}
@@ -1563,7 +1600,7 @@ export const register: Register = (on, options) => {
             </Text>
           ))}
           <Box key="percent" width={PERCENT_CELLS} flexShrink={0}>
-            <Text bold color={hl('percent') ? HL_COLOR : fill}>
+            <Text bold color={hl('percent') ? hlColor('percent') : fill}>
               {` ${percent}%${arrow}`}
             </Text>
           </Box>
@@ -1669,14 +1706,14 @@ export const register: Register = (on, options) => {
     }
     // A new window (a model switch) moved the percent, not this turn: say so while it is fresh.
     if (hl('window') && s.windowFrom !== undefined) {
-      line2.push({ segs: [{ text: `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`, hl: true }], rank: 4 })
+      line2.push({ segs: [hlSeg('window', `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`)], rank: 4 })
     }
     if (s.compactAt !== undefined && over === undefined) {
       // "┊ auto-compact at 167.0k (83.0k left)" — the same ┊ as the bar's compaction mark
       const seg: Seg[] = [{ text: `┊ auto-compact at ${fmtTokens(s.compactAt)}` }]
       let short: Seg[] | undefined
       if (headroom !== undefined) {
-        const left: Seg = { text: fmtTokens(shown('headroom', Math.max(0, headroom))), hl: hl('headroom') }
+        const left = hlSeg('headroom', fmtTokens(shown('headroom', Math.max(0, headroom))))
         seg.push({ text: ' (' }, left, { text: ' left)' })
         // short: "┊ 83.0k left"
         short = [{ text: '┊ ' }, left, { text: ' left' }]
@@ -1691,26 +1728,53 @@ export const register: Register = (on, options) => {
     // the sign is the final value's: a count-up passes through 0
     const signed = (n: number, final = n) => `${final > 0 ? '+' : '−'}${fmtTokens(Math.abs(n))}`
     if (turnGrowth !== 0) {
-      line2.push({ segs: [{ text: 'this turn ' }, { text: signed(turnGrowth), hl: hl('tokens') }], rank: 2 })
+      // the running turn's growth goes by its sign
+      const growth: Seg = hl('tokens')
+        ? { text: signed(turnGrowth), hl: true, color: MOVE_COLOR[turnGrowth > 0 ? 'up' : 'down'] }
+        : { text: signed(turnGrowth) }
+      line2.push({ segs: [{ text: 'this turn ' }, growth], rank: 2 })
     } else if (s.compaction !== undefined) {
-      // until a turn end measures a real turn again, the compaction is the news
-      line2.push({ segs: [{ text: compactionText(s.compaction) }], rank: 2 })
-    } else if (s.lastDelta !== undefined && s.lastDelta !== 0) {
+      // until a turn end measures a real turn again, the compaction is the news;
+      // "182.0k → 31.0k" in the colour of its move
+      const c = s.compaction
+      const text = compactionText(c)
+      const move = c.before !== undefined && c.after !== undefined && c.before !== c.after ? (c.after > c.before ? 'up' : 'down') : undefined
+      const prefix = 'compacted '
       line2.push({
-        segs: [{ text: 'last turn ' }, { text: signed(shown('delta', s.lastDelta), s.lastDelta), hl: hl('delta') }],
+        segs:
+          move === undefined
+            ? [{ text }]
+            : [{ text: prefix }, { text: text.slice(prefix.length), color: MOVE_COLOR[move], bold: false }],
         rank: 2,
       })
+    } else if (s.lastDelta !== undefined && s.lastDelta !== 0) {
+      line2.push({ segs: [{ text: 'last turn ' }, hlSeg('delta', signed(shown('delta', s.lastDelta), s.lastDelta))], rank: 2 })
     }
-    if (trendTokens.length > 1) line2.push({ segs: [{ text: trendText(trendTokens, s.window) }], rank: 1 })
+    if (trendTokens.length > 1) {
+      // "trend ▁▂▃▅▇ 12→42%", its ends in the colour of their move
+      const text = trendText(trendTokens, s.window)
+      const ends = text.slice(text.lastIndexOf(' ') + 1)
+      const kept = trendTokens.slice(-TREND_LEN)
+      const first = kept[0] ?? 0
+      const last = kept[kept.length - 1] ?? 0
+      const move = last > first ? 'up' : last < first ? 'down' : undefined
+      line2.push({
+        segs:
+          move === undefined
+            ? [{ text }]
+            : [{ text: text.slice(0, text.length - ends.length) }, { text: ends, color: MOVE_COLOR[move], bold: false }],
+        rank: 1,
+      })
+    }
 
     const line3: Group[] = [{ segs: [{ text: `session ${duration(now - s.startedAt)}` }], rank: 1 }]
-    if (s.usd !== undefined) line3.push({ segs: [{ text: `$${shown('usd', s.usd).toFixed(2)}`, hl: hl('usd') }], rank: 4 })
+    if (s.usd !== undefined) line3.push({ segs: [hlSeg('usd', `$${shown('usd', s.usd).toFixed(2)}`)], rank: 4 })
     s.limits.forEach((l, i) => {
       const key = `limit:${l.kind}`
       // short: "5h 23%", without when the window resets
       const short: Seg[] = [
         { text: `${LIMIT_NAMES[l.kind] ?? l.kind} ` },
-        { text: `${Math.round(shown(key, l.percentUsed))}%`, hl: hl(key) },
+        hlSeg(key, `${Math.round(shown(key, l.percentUsed))}%`),
       ]
       const resets = resetText(l.resetsAt, now)
       line3.push({
@@ -1727,7 +1791,7 @@ export const register: Register = (on, options) => {
         {groups.length === 0 ? <Text dimColor> </Text> : null}
         {joinSegs(groups).map((g, i) => (
           <Box key={`${key}${i}`} flexShrink={0}>
-            <Text bold={!isPlain(g)} color={g.color ?? (g.hl ? HL_COLOR : undefined)} dimColor={isPlain(g)}>
+            <Text bold={g.bold ?? !isPlain(g)} color={g.color ?? (g.hl ? HL_COLOR : undefined)} dimColor={isPlain(g)}>
               {g.text}
             </Text>
           </Box>

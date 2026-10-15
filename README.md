@@ -64,8 +64,9 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - The bar fills in eighth-block steps (`▏▎▍▌▋▊▉█`), so it moves smoothly. It is up to 40 cells wide.
 - A `┊` mark on the empty part shows where auto-compaction runs.
 - The meter moves with each model request of a running turn, not only when the turn ends.
-- When a reading raises the fill, the newly added part is drawn bold blue (`suggestion`) for about 10 s. The percent then shows `▲` (or `▼` when it drops).
-- **Change highlight:** every number that changed since the last reading is drawn bold blue for about 10 s (`HIGHLIGHT_TICKS` × 0.7 s). This covers tokens, tokens left before compaction, the turn's growth, percent, cost and each rate-limit percent. Unchanged numbers stay dim. A new window (a model switch) is no growth: no `▲`, no count-up, just the `window …` note.
+- When a reading raises the fill, the newly added part is drawn bold green (`success`) for about 10 s. The percent then shows a green `▲`, or a red `▼` (`error`) when it drops.
+- **Change highlight:** every number that changed since the last reading is drawn bold for about 10 s (`HIGHLIGHT_TICKS` × 0.7 s): green where it went up, red where it went down (`moveOf`). This covers tokens, tokens left before compaction, percent, cost, each rate-limit percent and the `window … → …` note. A turn's growth (`this turn`, `last turn`) goes by its sign: `+` green, `−` red. Unchanged numbers stay dim. A new window (a model switch) is no growth: no `▲`, no count-up, just the `window …` note.
+- **Arrows** take the same colours, not bold: the trend's ends (`12→42%` green when the fill rose over the trend, red when it fell) and the compaction note (`compacted 182.0k → 31.0k`, red).
 - **Count-up:** a changed number does not jump to its new value. It counts there from the old one over 6 s with an ease-out (`TWEEN_STEPS` × `TWEEN_MS`), and the bar grows with it. A newer reading restarts the count.
 - **Trend:** the tokens at the last 8 turn ends, scaled to the values shown, then first→last as percents of the window shown now, so a switch to a smaller window draws no spike.
 - **Over the window:** the engine caps the percent at 100, so a context bigger than the window (after a switch to a smaller model) shows as red tokens and the warning at the start of row 2.

@@ -14,6 +14,7 @@ import {
   fmtTokens,
   litKey,
   modelLabel,
+  moveOf,
   parseModelOutput,
   meterRuns,
   parseEffortCommand,
@@ -23,6 +24,7 @@ import {
   sleepTicks,
   sparkline,
   takesMono,
+  toSnapshot,
   trendText,
   tween,
 } from '../hooks/register'
@@ -205,14 +207,51 @@ test('band shows fill, tokens, cost and limits; a new reading redraws it', async
   expect(mid).toBeGreaterThan(42)
   expect(mid).toBeLessThan(91)
   await clock.advance(4500)
-  // …land on the new one, still highlighted
-  expect(await ui.find({ type: 'Text', text: /91%▲/ })).toBeDefined()
+  // …land on the new one, still highlighted: green, as every number that went up
+  expect((await ui.find({ type: 'Text', text: /91%▲/ }))?.props.color).toBe('success')
   const tokens = await ui.find({ type: 'Text', text: '182.0k' })
   expect(tokens?.props.bold).toBe(true)
-  expect(tokens?.props.color).toBe('suggestion')
+  expect(tokens?.props.color).toBe('success')
   const delta = await ui.find({ type: 'Text', text: '+98.0k' })
-  expect(delta?.props.color).toBe('suggestion')
+  expect(delta?.props.color).toBe('success')
+  // the bar's newly filled part, and the trend's rise
+  const newRun = (await ui.findAll({ type: 'Text' })).find(t => /^[█▉▊▋▌▍▎▏]+$/.test(t.text ?? '') && t.props.bold)
+  expect(newRun?.props.color).toBe('success')
+  expect((await ui.find({ type: 'Text', text: '42→91%' }))?.props.color).toBe('success')
+
+  // a drop is red, its arrow too
+  current = usage(60_000, 30)
+  await turnEnds($, current)
+  await clock.advance(6500)
+  expect((await ui.find({ type: 'Text', text: /30%▼/ }))?.props.color).toBe('error')
+  expect((await ui.find({ type: 'Text', text: '60.0k' }))?.props.color).toBe('error')
+  expect((await ui.find({ type: 'Text', text: '−122.0k' }))?.props.color).toBe('error')
+  expect((await ui.find({ type: 'Text', text: '42→30%' }))?.props.color).toBe('error')
   await ui.unmount()
+})
+
+describe('which way a change went', () => {
+  const base = toSnapshot(usage(84_000, 42), 0)
+  const after = (u: SessionUsage) => toSnapshot(u, 1, base, 5, true)
+
+  test('a rise is up and a fall is down, key by key', async () => {
+    const up = after({ ...usage(100_000, 50), cost: { usd: 2 }, rateLimits: [{ kind: 'five_hour', percentUsed: 30 }] })
+    for (const key of ['tokens', 'percent', 'usd', 'limit:five_hour', 'delta']) expect(moveOf(up, key), key).toBe('up')
+    const down = after({ ...usage(50_000, 25), cost: { usd: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 10 }] })
+    for (const key of ['tokens', 'percent', 'usd', 'limit:five_hour', 'delta']) expect(moveOf(down, key), key).toBe('down')
+  })
+
+  test('a new window and the headroom go their own way', async () => {
+    const smaller = toSnapshot(usageIn(100_000, 84_000), 1, toSnapshot(usageIn(1_000_000, 84_000), 0), 5)
+    expect(moveOf(smaller, 'window')).toBe('down')
+    const withRoom = (tokens: number) =>
+      usageIn(200_000, tokens, breakdownOf({ window: 200_000, tokens, compactAt: 167_000 }))
+    const less = toSnapshot(withRoom(120_000), 1, toSnapshot(withRoom(84_000), 0), 5)
+    expect(moveOf(less, 'headroom')).toBe('down')
+    expect(moveOf(less, 'tokens')).toBe('up')
+    // a key that did not move has no way
+    expect(moveOf(less, 'usd')).toBeUndefined()
+  })
 })
 
 describe('bar runs', () => {
@@ -960,7 +999,7 @@ describe('model switch', () => {
     await turnEnds($, current)
     const ui = await band($, 180)
     // 140k, 150k, 160k, 180k: of the 200k window now shown, 70% to 90%
-    expect(await ui.find({ type: 'Text', text: /trend ▁▃▅█ 70→90%/ })).toBeDefined()
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/trend ▁▃▅█ 70→90%/)
     await ui.unmount()
   })
 
@@ -1089,7 +1128,7 @@ describe('readings', () => {
     ui = await band($, 160)
     expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '+60.0k' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /trend ▁▂█ 20→55%/ })).toBeDefined()
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/trend ▁▂█ 20→55%/)
     await ui.unmount()
   })
 
@@ -1227,7 +1266,11 @@ describe('readings', () => {
     const ui = await band($, 140)
     expect(await ui.find({ type: 'Text', text: /91%/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /~31\.0k/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /compacted 182\.0k → 31\.0k/ })).toBeDefined()
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/compacted 182\.0k → 31\.0k/)
+    // a fall, red, but not bold: no fresh number
+    const freed = await ui.find({ type: 'Text', text: '182.0k → 31.0k' })
+    expect(freed?.props.color).toBe('error')
+    expect(freed?.props.bold).toBe(false)
     await ui.unmount()
   })
 
@@ -1245,7 +1288,7 @@ describe('readings', () => {
     await clock.advance(7000)
     const ui = await band($, 140, true)
     expect(await ui.find({ type: 'Text', text: /this turn/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /compacted 150\.0k → 30\.0k/ })).toBeDefined()
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/compacted 150\.0k → 30\.0k/)
     await ui.unmount()
   })
 
@@ -1267,7 +1310,7 @@ describe('readings', () => {
     current = usage(40_000, 20)
     await turnEnds($, current)
     let ui = await band($, 140)
-    expect(await ui.find({ type: 'Text', text: /compacted 182\.0k → 31\.0k/ })).toBeDefined()
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/compacted 182\.0k → 31\.0k/)
     await ui.unmount()
     // the second counts its own growth while it runs
     context = 52_000
