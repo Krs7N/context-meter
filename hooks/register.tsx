@@ -261,7 +261,10 @@ export function meterRuns(args: {
   return runs.filter(r => r.text.length > 0)
 }
 
-type Seg = { text: string; hl?: boolean }
+/** A piece of a stats row: plain (dim), highlighted (`hl`, a fresh change), or in a colour of its own (a warning). */
+type Seg = { text: string; hl?: boolean; color?: string }
+
+const isPlain = (seg: Seg) => !seg.hl && seg.color === undefined
 
 /** Groups joined by ` · `, adjacent plain pieces merged so the row stays few Texts. */
 function joinSegs(groups: Seg[][]): Seg[] {
@@ -269,7 +272,7 @@ function joinSegs(groups: Seg[][]): Seg[] {
   groups.forEach((g, i) => {
     for (const seg of i > 0 ? [{ text: ' · ' }, ...g] : g) {
       const last = out[out.length - 1]
-      if (last && !last.hl && !seg.hl) last.text += seg.text
+      if (last && isPlain(last) && isPlain(seg)) last.text += seg.text
       else out.push({ ...seg })
     }
   })
@@ -427,13 +430,16 @@ let lastSaved: string | undefined
  */
 async function pollSavedEffort($: EngineInterface): Promise<void> {
   try {
-    const s = await read($, snap)
-    const level = savedEffort(await $.settings.read(), s?.model)
+    // the polled model: the breakdown's name is stale after a switch until the next full reading
+    const [s, polled] = await Promise.all([read($, snap), read($, model)])
+    const level = savedEffort(await $.settings.read(), polled ?? s?.model)
     if (level === undefined || level === lastSaved) return
     const isFirst = lastSaved === undefined
     lastSaved = level
     // a newly saved level changes the level only; ultracode stays as it was
-    await update($, effort, old => (isFirst && old.level !== undefined ? old : { ...old, level }))
+    await update($, effort, old =>
+      isFirst && old.level !== undefined ? old : { ...old, level, isUnsupported: false },
+    )
   } catch {
     // settings unreadable: hooks and requests still fill it in
   }
@@ -527,20 +533,29 @@ export function parseModelOutput(text: string | undefined): string | undefined {
   return m?.[1]?.trim() || undefined
 }
 
-/** The main loop's model, straight from the engine. */
+/**
+ * The main loop's model, straight from the engine. A switch to another model (not
+ * the same one named another way) changes the window, the auto-compact point and the
+ * saved effort, and no measure follows a /model: read them all now.
+ */
 async function refreshModel($: EngineInterface): Promise<void> {
   try {
+    const old = await read($, model)
     const name = await $.session.model()
-    await update($, model, old => (old === name ? old : name))
+    await update($, model, o => (o === name ? o : name))
+    if (old !== null && modelLabel(old) !== modelLabel(name)) {
+      await refresh($)
+      await pollSavedEffort($)
+    }
   } catch {
     // no model yet: the badge shows "model ?"
   }
 }
 
 /**
- * Runs `/model <alias>`, then reads the model back. When Claude Code wants a
- * confirmation first (it answers "Kept model as …" to a plugin's run, which cannot
- * show the dialog) and plugins may not submit slash commands, the mod says what to type.
+ * Runs `/model <alias>`, then reads the model back from the engine. When Claude Code
+ * keeps the old model (it answers "Kept model as …"), the mod says so; typing the
+ * command answers the same, so it suggests nothing.
  */
 async function pickModel($: EngineInterface, alias: ModelChoice): Promise<void> {
   await update($, isModelPickerOpen, () => false)
@@ -549,9 +564,8 @@ async function pickModel($: EngineInterface, alias: ModelChoice): Promise<void> 
     const name = parseModelOutput(result.text)
     if (/kept model as/i.test(result.text ?? '') && modelFamily(name) !== alias) {
       await $.ui.toast(`Claude Code kept ${modelLabel(name)}: /model ${alias} did not switch`)
-    } else if (name) {
-      await update($, model, () => name)
     }
+    // the engine's answer, not the command's text: writing that here would hide the switch from refreshModel
     await refreshModel($)
   } catch (err) {
     await $.ui.toast(`/model ${alias} failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1043,6 +1057,10 @@ export const register: Register = on => {
 
     const headroom = s.compactAt !== undefined && s.tokens !== undefined ? s.compactAt - s.tokens : undefined
     const line2: Seg[][] = []
+    // A new window (a model switch) moved the percent, not this turn: say so while it is fresh.
+    if (hl('window') && s.windowFrom !== undefined) {
+      line2.push([{ text: `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`, hl: true }])
+    }
     if (s.compactAt !== undefined) {
       // "┊ auto-compact at 167.0k (83.0k left)" — the same ┊ as the bar's compaction mark
       const seg: Seg[] = [{ text: `┊ auto-compact at ${fmtTokens(s.compactAt)}` }]
@@ -1080,7 +1098,7 @@ export const register: Register = on => {
         {groups.length === 0 ? <Text dimColor> </Text> : null}
         {joinSegs(groups).map((g, i) => (
           <Box key={`${key}${i}`} flexShrink={0}>
-            <Text bold={g.hl} color={g.hl ? HL_COLOR : undefined} dimColor={!g.hl}>
+            <Text bold={!isPlain(g)} color={g.color ?? (g.hl ? HL_COLOR : undefined)} dimColor={isPlain(g)}>
               {g.text}
             </Text>
           </Box>
