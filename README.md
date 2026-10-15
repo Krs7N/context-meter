@@ -57,6 +57,7 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - Below 72 terminal columns, or when the full band is taller than the room above the prompt (`maxRows`, a short fullscreen terminal), only row 1 and the two badges are drawn, without frame and mascot.
 - Before the first reply of a session (or right after `/clear`) the token count shows "waiting for the first reply". Right after a compaction it shows what the compaction left, `~31.0k / 200.0k tokens`, until the next reply.
 - `/clear` and `/resume` start the meter over: no growth or trend is measured against the conversation before.
+- In Claude Code Desktop the band's text is set in the monospaced face and Clawd is drawn as one picture (`clawdSvg`), so he looks as he does in the terminal; the badges and picker options are Desktop's own buttons.
 
 ## Model badge
 

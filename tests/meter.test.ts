@@ -5,6 +5,7 @@ import type { SessionContextBreakdown, SessionMessage, SessionUsage, TurnStepInp
 import {
   bar,
   clawdRows,
+  clawdSvg,
   duration,
   outfitFor,
   effortBadge,
@@ -240,6 +241,43 @@ test('idle Clawd falls asleep with zZzZ and wakes on a prompt', async ($, on) =>
   await clock.advance(700)
   expect(await ui.find({ type: 'Text', text: /[zZ]/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('on the desktop Clawd is one picture and the band is set in the monospaced face', async ($, on) => {
+  on('session.usage', () => ({ value: usage(84_000, 42) }))
+  on('session.start', () => ({ cwd: '.' }))
+  mock.clock(on, { now: 600_000 })
+  await $.session.start(START)
+  const desk = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(140) })
+  const picture = await desk.find({ type: 'Svg' })
+  expect(picture?.props.alt).toBe('Clawd')
+  expect(String(picture?.props.source)).toContain('<svg')
+  // no block-glyph rows, which a page font draws with gaps between the lines
+  expect(await desk.find({ type: 'Text', text: /▐▛███▜▌|▀ ▀/ })).toBeUndefined()
+  expect((await desk.find({ type: 'Text', text: '84.0k' }))?.props.mono).toBe(true)
+  expect((await desk.find({ type: 'Text', text: /\$1\.50/ }))?.props.mono).toBe(true)
+  await desk.unmount()
+  // the terminal is all cells already: text Clawd, no mono prop
+  const term = await band($, 140)
+  expect(await term.find({ type: 'Svg' })).toBeUndefined()
+  expect(await term.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeDefined()
+  expect((await term.find({ type: 'Text', text: '84.0k' }))?.props.mono).toBeUndefined()
+  await term.unmount()
+})
+
+test('the desktop picture draws every cell of every outfit', async () => {
+  for (const outfit of ['none', 'cap', 'cap-bottles', 'cap-bottles-glasses', 'top-hat'] as const) {
+    const rows = clawdRows({ outfit, isShut: false, typing: 1 })
+    const svg = clawdSvg(rows)
+    expect(svg.width).toBe(13 * 8)
+    expect(svg.height).toBe(rows.length * 16)
+    // every glyph Clawd is drawn with has a shape: no stray text but the zZz
+    expect(svg.source).not.toContain('<text')
+  }
+  const asleep = clawdSvg(clawdRows({ outfit: 'none', isShut: true, zzz: ' zZz     ' }))
+  expect(asleep.source).toContain('>Z</text>')
+  // the theme's text colour (straws, rims) follows a light page
+  expect(clawdSvg(clawdRows({ outfit: 'cap-bottles', isShut: false })).source).toContain('class="ts"')
 })
 
 test('narrow terminal gets the one-line meter without the mascot', async ($, on) => {

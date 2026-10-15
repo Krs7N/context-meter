@@ -180,6 +180,130 @@ export function clawdRows(o: { outfit: Outfit; isShut: boolean; typing?: number;
 }
 
 /**
+ * Theme colours as Claude Code's dark theme draws them, for the Svg Clawd: an Svg is
+ * drawn isolated from the page, so theme keys mean nothing inside it. Raw colours pass through.
+ */
+const SVG_COLORS: Record<string, string> = {
+  claude: '#d77757',
+  suggestion: '#b1b9f9',
+  success: '#4eba65',
+  warning: '#ffc107',
+  error: '#ff6b80',
+  merged: '#af87ff',
+  text: '#ffffff',
+  inverseText: '#000000',
+  inactive: '#999999',
+  subtle: '#505050',
+}
+/** One terminal cell in the Svg, in CSS pixels: twice as tall as wide, as a terminal draws it. */
+const CELL_W = 8
+const CELL_H = 16
+
+/** The quarters of a cell each block glyph fills: left-top, right-top, left-bottom, right-bottom. */
+const QUADS: Record<string, readonly [number, number, number, number]> = {
+  '█': [1, 1, 1, 1],
+  '▀': [1, 1, 0, 0],
+  '▄': [0, 0, 1, 1],
+  '▌': [1, 0, 1, 0],
+  '▐': [0, 1, 0, 1],
+  '▘': [1, 0, 0, 0],
+  '▝': [0, 1, 0, 0],
+  '▖': [0, 0, 1, 0],
+  '▗': [0, 0, 0, 1],
+  '▛': [1, 1, 1, 0],
+  '▜': [1, 1, 0, 1],
+  '▙': [1, 0, 1, 1],
+  '▟': [0, 1, 1, 1],
+  '▚': [1, 0, 0, 1],
+  '▞': [0, 1, 1, 0],
+}
+
+const svgColor = (c: string | undefined) => (c === undefined ? undefined : (SVG_COLORS[c] ?? c))
+const escapeXml = (s: string) => s.replace(/[<>&"']/g, ch => `&#${ch.charCodeAt(0)};`)
+
+/**
+ * The theme's `text` colour turns dark on a light page, as the terminal's light theme draws
+ * it (the straws sit on the page itself). Classes, since a CSS rule outranks the fill attribute.
+ */
+const SVG_STYLE =
+  '<style>.tf{fill:#ffffff}.ts{stroke:#ffffff}@media (prefers-color-scheme: light){.tf{fill:#000000}.ts{stroke:#000000}}</style>'
+
+/**
+ * One glyph of a cell at (x, y) as Svg markup: blocks as rects, the line-drawing ones as
+ * strokes. `isText` marks the theme's `text` colour, which follows the page's light or dark.
+ */
+function glyphSvg(ch: string, x: number, y: number, fill: string, isBold: boolean, isText = false): string {
+  const w = CELL_W
+  const h = CELL_H
+  const fillClass = isText ? ' class="tf"' : ''
+  const rect = (rx: number, ry: number, rw: number, rh: number) =>
+    `<rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" fill="${fill}"${fillClass}/>`
+  const stroke = (d: string, width: number) =>
+    `<path d="${d}" fill="none" stroke="${fill}" stroke-width="${width}" stroke-linecap="round"${isText ? ' class="ts"' : ''}/>`
+  const q = QUADS[ch]
+  if (q) {
+    const [lt, rt, lb, rb] = q
+    if (lt && rt && lb && rb) return rect(x, y, w, h)
+    const half = (left: number, right: number, top: number) =>
+      left && right ? rect(x, top, w, h / 2) : (left ? rect(x, top, w / 2, h / 2) : '') + (right ? rect(x + w / 2, top, w / 2, h / 2) : '')
+    return half(lt, rt, y) + half(lb, rb, y + h / 2)
+  }
+  switch (ch) {
+    case ' ':
+      return ''
+    case '▁':
+      return rect(x, y + h - h / 8, w, h / 8)
+    case '─':
+      return rect(x, y + h / 2 - (isBold ? 1 : 0.5), w, isBold ? 2 : 1)
+    case '━':
+      return rect(x, y + h / 2 - 1.5, w, 3)
+    case '╰':
+      return stroke(`M${x + w / 2} ${y} V${y + h / 2 - 2} Q${x + w / 2} ${y + h / 2} ${x + w / 2 + 2} ${y + h / 2} H${x + w}`, 1.5)
+    case '╯':
+      return stroke(`M${x + w / 2} ${y} V${y + h / 2 - 2} Q${x + w / 2} ${y + h / 2} ${x + w / 2 - 2} ${y + h / 2} H${x}`, 1.5)
+    case '(':
+      return stroke(`M${x + w - 2} ${y + 3} Q${x + 1} ${y + h / 2} ${x + w - 2} ${y + h - 3}`, isBold ? 2 : 1.5)
+    case ')':
+      return stroke(`M${x + 2} ${y + 3} Q${x + w - 1} ${y + h / 2} ${x + 2} ${y + h - 3}`, isBold ? 2 : 1.5)
+    case '●':
+      return `<circle cx="${x + w / 2}" cy="${y + h / 2}" r="${w * 0.35}" fill="${fill}"${fillClass}/>`
+    default:
+      return `<text x="${x + w / 2}" y="${y + h * 0.75}" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="${h * 0.8}"${isBold ? ' font-weight="bold"' : ''} fill="${fill}"${fillClass}>${escapeXml(ch)}</text>`
+  }
+}
+
+/**
+ * Clawd's rows (`clawdRows`) as one Svg, for surfaces that draw Text in a page font: there
+ * the block glyphs leave gaps between lines and the cells lose their width. Every cell is
+ * drawn as the terminal would fill it, so he looks the same.
+ */
+export function clawdSvg(rows: readonly (readonly ClawdPiece[])[]): { source: string; width: number; height: number } {
+  const parts: string[] = []
+  rows.forEach((row, r) => {
+    let col = 0
+    for (const p of row) {
+      const fill = svgColor(p.color) ?? SVG_COLORS.text ?? '#ffffff'
+      const bg = svgColor(p.bg)
+      for (const ch of p.text) {
+        const x = col * CELL_W
+        const y = r * CELL_H
+        if (bg) parts.push(`<rect x="${x}" y="${y}" width="${CELL_W}" height="${CELL_H}" fill="${bg}"/>`)
+        parts.push(glyphSvg(ch, x, y, fill, p.bold === true, p.color === 'text'))
+        col++
+      }
+    }
+  })
+  const width = 13 * CELL_W
+  const height = rows.length * CELL_H
+  const source =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" shape-rendering="crispEdges">` +
+    SVG_STYLE +
+    parts.join('') +
+    '</svg>'
+  return { source, width, height }
+}
+
+/**
  * The key that lights up on typing frame `t`: one under the arm that is down
  * (left on even frames, right on odd), picked pseudo-randomly from the frame.
  */
@@ -984,7 +1108,14 @@ export const register: Register = on => {
     // the clock, not the reading's time, so the session's length runs between readings
     const now = await $.clock.now().catch(() => s.at)
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    const { Box, Button } = table
+    // The band is laid out in cells. The terminal is all cells; Claude Code Desktop draws a
+    // Text in its page font unless asked for the monospaced face, so there every Text takes it,
+    // and Clawd is one Svg (block glyphs leave gaps between lines in a page).
+    const isCells = e.surface === 'terminal'
+    const Text: typeof table.Text = isCells ? table.Text : props => table.Text({ ...props, mono: true })
+    const Svg = !isCells && 'Svg' in table ? table.Svg : undefined
     const isWorking = e.props.isWorking
     const columns = e.props.bodyColumns
     // A changed number counts from its old value to the new one while `step` runs.
@@ -1251,15 +1382,22 @@ export const register: Register = on => {
     return (
       <Box key="context-meter" borderStyle="round" borderColor="claude" paddingX={1} flexDirection="row" gap={2}>
         <Box key="clawd" flexDirection="column" flexShrink={0}>
-          {clawd.map((row, r) => (
-            <Box key={`clawd${r}`} flexDirection="row">
-              {row.map((p, i) => (
-                <Text key={`c${r}-${i}`} color={p.color} backgroundColor={p.bg} bold={p.bold}>
-                  {p.text}
-                </Text>
-              ))}
-            </Box>
-          ))}
+          {Svg ? (
+            <Svg
+              {...clawdSvg(clawd)}
+              alt={`Clawd${isAsleep ? ', asleep' : isWorking ? ', typing' : ''}`}
+            />
+          ) : (
+            clawd.map((row, r) => (
+              <Box key={`clawd${r}`} flexDirection="row">
+                {row.map((p, i) => (
+                  <Text key={`c${r}-${i}`} color={p.color} backgroundColor={p.bg} bold={p.bold}>
+                    {p.text}
+                  </Text>
+                ))}
+              </Box>
+            ))
+          )}
         </Box>
         <Box key="stats" flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
           {meter}

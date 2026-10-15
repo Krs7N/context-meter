@@ -17,6 +17,7 @@
 - When Claude Code keeps the model, the toast no longer advises typing `/model`, which answers the same: `Claude Code kept Opus 5.5: /model sonnet did not switch`.
 - A reload during a count-up lands the numbers instead of freezing them midway.
 - Less work per turn: the breakdown is read only when the fill moved, `/config` only until the effort is known, and nothing is awaited before a request is sent.
+- Claude Code Desktop: Clawd is drawn as a picture, so his rows no longer split or shift. The band's text uses the monospaced face, so the bar, numbers and columns line up as in the terminal. The terminal is unchanged.
 
 ## 0.3.0 — 2026-10-14
 
