@@ -567,6 +567,8 @@ async function refreshModel($: EngineInterface): Promise<void> {
     const name = await $.session.model()
     await update($, model, o => (o === name ? o : name))
     if (old !== null && modelLabel(old) !== modelLabel(name)) {
+      // whether the new model takes effort is known at its first request, not from the old one's
+      await update($, effort, e => (e.isUnsupported ? { ...e, isUnsupported: false } : e))
       await refresh($)
       await pollSavedEffort($)
     }
@@ -1209,11 +1211,11 @@ export const register: Register = on => {
         : 0
     // the sign is the final value's: a count-up passes through 0
     const signed = (n: number, final = n) => `${final > 0 ? '+' : '−'}${fmtTokens(Math.abs(n))}`
-    if (s.compaction !== undefined) {
+    if (turnGrowth !== 0) {
+      line2.push([{ text: 'this turn ' }, { text: signed(turnGrowth), hl: hl('tokens') }])
+    } else if (s.compaction !== undefined) {
       // until a turn end measures a real turn again, the compaction is the news
       line2.push([{ text: compactionText(s.compaction) }])
-    } else if (turnGrowth !== 0) {
-      line2.push([{ text: 'this turn ' }, { text: signed(turnGrowth), hl: hl('tokens') }])
     } else if (s.lastDelta !== undefined && s.lastDelta !== 0) {
       line2.push([
         { text: 'last turn ' },

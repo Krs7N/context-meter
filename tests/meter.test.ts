@@ -647,6 +647,23 @@ describe('model switch', () => {
     expect(await ui.find({ type: 'Text', text: /no effort/ })).toBeDefined()
     await ui.unmount()
   })
+
+  test('switching away from a model without effort clears “no effort”', async ($, on) => {
+    let name = 'claude-haiku-5-5'
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.model', () => ({ value: name }) as never)
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answer(() => 50_000))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($)
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: /no effort/ })).toBeDefined()
+    name = 'claude-opus-5-5'
+    await clock.advance(1500)
+    expect(await ui.find({ type: 'Text', text: /no effort/ })).toBeUndefined()
+    await ui.unmount()
+  })
 })
 
 describe('readings', () => {
@@ -780,6 +797,35 @@ describe('readings', () => {
     const ui = await band($, 140, true)
     expect(await ui.find({ type: 'Text', text: /this turn/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /compacted 150\.0k → 30\.0k/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('after a compaction, the second turn shows its own growth', async ($, on) => {
+    let current: SessionUsage = usage(182_000, 91)
+    let context = 40_000
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('session.compact', () => ({ messages: [SUMMARY], tokensBefore: 182_000, tokensAfter: 31_000 }))
+    on('turn.step', answer(() => context))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    current = { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 } }
+    await $.session.compact({ trigger: 'manual', messages: [ASKED, SUMMARY] })
+    // the first turn after it is measured from nothing: the compaction stays the news
+    await request($, 'high')
+    current = usage(40_000, 20)
+    await turnEnds($, current)
+    let ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: /compacted 182\.0k → 31\.0k/ })).toBeDefined()
+    await ui.unmount()
+    // the second counts its own growth while it runs
+    context = 52_000
+    await request($, 'high')
+    await clock.advance(7000)
+    ui = await band($, 140, true)
+    expect(await ui.find({ type: 'Text', text: /this turn/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\+12\.0k/ })).toBeDefined()
     await ui.unmount()
   })
 
