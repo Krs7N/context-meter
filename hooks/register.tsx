@@ -279,14 +279,18 @@ function glyphSvg(ch: string, x: number, y: number, fill: string, isBold: boolea
  */
 export function clawdSvg(rows: readonly (readonly ClawdPiece[])[]): { source: string; width: number; height: number } {
   const parts: string[] = []
+  const eyes = CLAWD.eyesOpen.trim()
   rows.forEach((row, r) => {
     let col = 0
     for (const p of row) {
       const fill = svgColor(p.color) ?? SVG_COLORS.text ?? '#ffffff'
-      const bg = svgColor(p.bg)
+      // His open eyes are the empty quarters of ▛ and ▜: black behind them, so they are not
+      // the page's colour (white on a light page).
+      const isEyes = p.text === eyes
       for (const ch of p.text) {
         const x = col * CELL_W
         const y = r * CELL_H
+        const bg = svgColor(p.bg) ?? (isEyes && (ch === '▛' || ch === '▜') ? SVG_COLORS.inverseText : undefined)
         if (bg) parts.push(`<rect x="${x}" y="${y}" width="${CELL_W}" height="${CELL_H}" fill="${bg}"/>`)
         parts.push(glyphSvg(ch, x, y, fill, p.bold === true, p.color === 'text'))
         col++

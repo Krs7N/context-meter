@@ -278,6 +278,12 @@ test('the desktop picture draws every cell of every outfit', async () => {
   expect(asleep.source).toContain('>Z</text>')
   // the theme's text colour (straws, rims) follows a light page
   expect(clawdSvg(clawdRows({ outfit: 'cap-bottles', isShut: false })).source).toContain('class="ts"')
+  // open eyes are black on any page: the ▛ and ▜ cells (columns 4 and 8 of his face row) sit on black
+  const face = clawdSvg(clawdRows({ outfit: 'none', isShut: false })).source
+  expect(face).toContain('<rect x="32" y="0" width="8" height="16" fill="#000000"/>')
+  expect(face).toContain('<rect x="64" y="0" width="8" height="16" fill="#000000"/>')
+  // the same glyphs in his body (the arms' gaps) stay see-through
+  expect(face).not.toContain('<rect x="24" y="16" width="8" height="16" fill="#000000"/>')
 })
 
 test('narrow terminal gets the one-line meter without the mascot', async ($, on) => {
