@@ -1005,7 +1005,7 @@ describe('readings', () => {
     on('session.usage', () => ({ value: usage(50_000, 25) }))
     on('session.start', () => ({ cwd: '.' }))
     on('turn.step', answer(() => 150_000))
-    mock.clock(on, { now: 600_000 })
+    const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
     const stream = $.turn.step({
       turnId: 't2',
@@ -1019,8 +1019,12 @@ describe('readings', () => {
       // nothing streamed
     }
     await stream.result
+    // past any count-up, the main meter's tokens are still the main conversation's, exactly
+    await clock.advance(7000)
     const ui = await band($, 140)
-    expect(await ui.find({ type: 'Text', text: '50.0k' })).toBeDefined()
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+    expect(texts).toContain('50.0k')
+    expect(texts).not.toContain('150.0k')
     expect(await ui.find({ type: 'Text', text: /MAX/ })).toBeUndefined()
     await ui.unmount()
   })
