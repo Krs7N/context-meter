@@ -643,16 +643,27 @@ async function refreshEffort($: EngineInterface): Promise<void> {
 }
 
 /**
+ * A model as settings tell it apart, for comparing names: the 1M variant is the same model
+ * ("claude-opus-5-5[1m]", "Opus 5.5 (1M context)" → "Opus 5.5"), and a version without a
+ * minor is its .0 ("claude-opus-4-20250514" → "Opus 4.0", as "claude-opus-4-0").
+ */
+const settingsModel = (name: string) =>
+  modelLabel(name.replace(/\[1m\]$/i, ''))
+    .replace(/ · 1M$/, '')
+    .replace(/^(\S+ \d+)$/, '$1.0')
+
+/**
  * The saved effort for a model: `modelSettings[model].effortLevel`, else the first
- * `modelSettings` entry naming the same model another way (settings key by id, the
- * session may say "Opus 5.5"), else the top-level `effortLevel`.
+ * `modelSettings` entry naming the same model another way (settings key by id without the
+ * 1M suffix, the session may say "Opus 5.5" or name the 1M variant), else the top-level
+ * `effortLevel`.
  */
 export function savedEffort(settings: Readonly<Record<string, unknown>>, model?: string): string | undefined {
   const perModel = settings.modelSettings as Record<string, { effortLevel?: unknown } | undefined> | undefined
-  let level = model ? perModel?.[model]?.effortLevel : undefined
+  let level = model ? (perModel?.[model]?.effortLevel ?? perModel?.[model.replace(/\[1m\]$/i, '')]?.effortLevel) : undefined
   if (level === undefined && model && perModel) {
-    const label = modelLabel(model)
-    level = Object.entries(perModel).find(([key, v]) => v?.effortLevel !== undefined && modelLabel(key) === label)?.[1]
+    const name = settingsModel(model)
+    level = Object.entries(perModel).find(([key, v]) => v?.effortLevel !== undefined && settingsModel(key) === name)?.[1]
       ?.effortLevel
   }
   level ??= settings.effortLevel

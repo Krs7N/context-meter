@@ -632,6 +632,10 @@ test('saved effort: per-model first, then the top-level default', async () => {
   const settings = { effortLevel: 'high', modelSettings: { 'claude-opus-5-5': { effortLevel: 'xhigh' } } }
   expect(savedEffort(settings, 'Opus 5.5')).toBe('xhigh')
   expect(savedEffort(settings, 'Sonnet 5.5')).toBe('high')
+  // the 1M variant is the same model to settings, and a dated id without a minor is its .0
+  expect(savedEffort(settings, 'claude-opus-5-5[1m]')).toBe('xhigh')
+  expect(savedEffort(settings, 'Opus 5.5 (1M context)')).toBe('xhigh')
+  expect(savedEffort({ effortLevel: 'high', modelSettings: { 'claude-opus-4-0': { effortLevel: 'low' } } }, 'claude-opus-4-20250514')).toBe('low')
 })
 
 test('working Clawd types on his keyboard, one arm at a time', async ($, on) => {
