@@ -892,6 +892,49 @@ describe('readings', () => {
     })
   }
 
+  test('a reading taken before /clear and answered after it is dropped', async ($, on) => {
+    let current: SessionUsage = usage(150_000, 75)
+    let isSlow = false
+    let markAsked = () => {}
+    const asked = new Promise<void>(resolve => (markAsked = resolve))
+    // the engine answers with the figures of the moment it was asked; a slow answer arrives late
+    on('session.usage', async ($, e) => {
+      const value = current
+      if (isSlow) {
+        isSlow = false
+        markAsked()
+        await $.clock.sleep(500)
+      }
+      return { value }
+    })
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    // a turn ends and its reading is slow; /clear runs once it was asked, before it is answered.
+    // The engine abandons the old conversation's dispatches when /clear ends it, so the late
+    // answer is never written over the fresh reading (a guard: the mod relies on it)
+    isSlow = true
+    const ending = turnEnds($, current)
+    await asked
+    await $.session.end({ reason: 'clear', sessionId: 'old', resume: { id: 'old' } })
+    current = { startedAt: 600_000, context: { window: 200_000 }, rateLimits: [], cost: { usd: 0 } }
+    await clock.advance(1000)
+    await ending
+    const ui = await band($, 140)
+    expect(await ui.find({ type: 'Text', text: /75%/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /waiting for the first reply/ })).toBeDefined()
+    // the new conversation's first turn is measured against nothing of the old one
+    current = usage(25_000, 13)
+    await turnEnds($, current)
+    await clock.advance(7000)
+    expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /trend/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('/compact redraws at once with what it freed', async ($, on) => {
     let current: SessionUsage = usage(182_000, 91)
     on('session.usage', () => ({ value: current }))
