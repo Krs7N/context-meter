@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 — 2026-10-15
+
+- Claude Code Desktop draws the band again. Desktop runs its own bundled Claude Code (2.1.295), whose Text refuses the `mono` prop, so it drew no band at all. The monospaced face is now set only on engines that take it (2.1.299 or later); older engines, or ones whose version is unknown, get the page font instead.
+- Until the first reading, the band shows one line, `Context waiting for the first reply`, instead of nothing. Where reading the usage fails, it shows why (`reading failed on desktop: …`), and the reason goes to the debug log.
+
 ## 0.3.2 — 2026-10-15
 
 - Each rate-limit window shows when it resets, counting down beside its percent: `5h 23% resets 2h 14m · 7d 41% resets 3d 4h`. The session's length stays. Where row 3 lacks room, the countdowns go first (the `7d` one first) and the percents stay.

@@ -74,6 +74,10 @@ declare module 'claude-code' {
       /** Frame tick of the last activity; Clawd sleeps once idle long enough. */
       awakeTick: number
       showDetails: boolean
+      /** Why the last reading failed, shown by the placeholder band; null once one succeeds. */
+      readError: string | null
+      /** The engine's Text takes `mono` (2.1.299 on); false while the version is unknown. */
+      hasMono: boolean
     }
   }
 }

@@ -21,6 +21,7 @@ import {
   savedEffort,
   resetText,
   sparkline,
+  takesMono,
   trendText,
   tween,
 } from '../hooks/register'
@@ -260,9 +261,10 @@ test('idle Clawd falls asleep with zZzZ and wakes on a prompt', { timeoutMs: 20_
   await ui.unmount()
 })
 
-test('on the desktop Clawd is one picture and the band is set in the monospaced face', async ($, on) => {
+test('on the desktop Clawd is one picture, and from 2.1.299 the band is set in the monospaced face', async ($, on) => {
   on('session.usage', () => ({ value: usage(84_000, 42) }))
   on('session.start', () => ({ cwd: '.' }))
+  on('session.version', () => ({ value: { version: '2.1.300', base: '2.1.300' } }))
   mock.clock(on, { now: 600_000 })
   await $.session.start(START)
   const desk = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(140) })
@@ -280,6 +282,56 @@ test('on the desktop Clawd is one picture and the band is set in the monospaced 
   expect(await term.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeDefined()
   expect((await term.find({ type: 'Text', text: '84.0k' }))?.props.mono).toBeUndefined()
   await term.unmount()
+})
+
+// Claude Code Desktop bundles its own engine, 2.1.295 on 2026-10-15, whose Text refuses `mono`:
+// a tree naming it draws no band at all.
+test('a desktop engine before 2.1.299, or of unknown version, gets no mono prop', async ($, on) => {
+  let answer: 'new' | 'old' | 'denied' | 'none' = 'new'
+  on('session.usage', () => ({ value: usage(84_000, 42) }))
+  on('session.start', () => ({ cwd: '.' }))
+  on('session.version', ($, e, next) =>
+    answer === 'new'
+      ? { value: { version: '2.1.300', base: '2.1.300' } }
+      : answer === 'old'
+        ? { value: { version: '2.1.295', base: '2.1.295' } }
+        : answer === 'denied'
+          ? { deny: 'no version here' }
+          : next(e),
+  )
+  mock.clock(on, { now: 600_000 })
+  for (const a of ['new', 'old', 'new', 'denied', 'new', 'none'] as const) {
+    answer = a
+    await $.session.start(START)
+    const desk = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(140) })
+    expect(await desk.find({ type: 'Text', text: '84.0k' }), a).toBeDefined()
+    const mono = (await desk.findAll({ type: 'Text' })).filter(t => t.props.mono !== undefined)
+    expect(mono.length > 0, `${a}: ${mono.length} Texts with mono`).toBe(a === 'new')
+    await desk.unmount()
+  }
+})
+
+test('mono from 2.1.299 on', async () => {
+  expect(takesMono('2.1.299')).toBe(true)
+  expect(takesMono('2.1.300')).toBe(true)
+  expect(takesMono('2.1.300-dev')).toBe(true)
+  expect(takesMono('2.2.0')).toBe(true)
+  expect(takesMono('3.0.0')).toBe(true)
+  expect(takesMono('2.1.298')).toBe(false)
+  expect(takesMono('2.1.295')).toBe(false)
+  expect(takesMono('2.0.400')).toBe(false)
+  expect(takesMono(undefined)).toBe(false)
+  expect(takesMono('nightly')).toBe(false)
+})
+
+test('with no reading yet the band is a placeholder that says why', async ($, on) => {
+  on('session.usage', () => ({ deny: 'usage unavailable here' }))
+  on('session.start', () => ({ cwd: '.' }))
+  mock.clock(on, { now: 600_000 })
+  await $.session.start(START)
+  const desk = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(140) })
+  expect(await desk.find({ type: 'Text', text: /reading failed on desktop: .*usage unavailable here/ })).toBeDefined()
+  await desk.unmount()
 })
 
 test('the desktop picture draws every cell of every outfit', async () => {

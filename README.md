@@ -10,7 +10,7 @@ Claude works, dresses up for the effort level and naps when you're idle.
 
 ## Install
 
-Requires Claude Code 2.1.296 or later. Type this at the prompt of a terminal session:
+Requires Claude Code 2.1.295 or later. Claude Code Desktop runs its own bundled Claude Code (2.1.295 as of 2026-10-15), whatever version the terminal has. Type this at the prompt of a terminal session:
 
 ```
 /plugin install context-meter --marketplace Krs7N/context-meter
@@ -63,7 +63,8 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - The session clock and the reset countdowns run between readings. A window whose reset time is unknown or already past shows its percent alone.
 - Before the first reply of a session (or right after `/clear`) the token count shows "waiting for the first reply". Right after a compaction it shows what the compaction left, `~31.0k / 200.0k tokens`, until the next reply.
 - `/clear` and `/resume` start the meter over: no growth or trend is measured against the conversation before.
-- In Claude Code Desktop the band's text is set in the monospaced face and Clawd is drawn as one picture (`clawdSvg`), so he looks as he does in the terminal; the badges and picker options are Desktop's own buttons.
+- In Claude Code Desktop Clawd is drawn as one picture (`clawdSvg`), so he looks as he does in the terminal; the badges and picker options are Desktop's own buttons. The band's text is set in the monospaced face where Desktop's engine supports it (2.1.299 or later, read with `$.session.version()`). An older engine refuses the whole band over that setting, so there, or while the version is unknown, the text uses Desktop's page font.
+- Until the first reading, the band is one line: `Context waiting for the first reply`, or, where reading the usage fails, `reading failed on desktop: <why>` in `warning`. The reason also goes to the debug log (`claude --debug`).
 
 ## Model badge
 
@@ -133,7 +134,7 @@ Every `/effort` writes a line to the debug log (`claude --debug`): `context-mete
 
 | Event | What happens |
 | --- | --- |
-| `session.start` | first reading; starts the mascot's animation loop where a terminal draws the band (the REPL); `-p` and SDK runs, which draw nothing, run none of the band's work |
+| `session.start` | reads the engine's version (whether Text takes `mono`); first reading; starts the mascot's animation loop where a terminal draws the band (the REPL); `-p` and SDK runs, which draw nothing, run none of the band's work |
 | `session.attach` / `session.detach` | Claude Code Desktop joining starts the band's work with a fresh reading; the last drawing client leaving stops it |
 | `turn.complete` | the end of a main-thread turn: a reading with breakdown, the turn's growth and a trend point |
 | `session.measure` | a plain reading, after each turn and whenever a rate-limit window moves (mid-turn too) |

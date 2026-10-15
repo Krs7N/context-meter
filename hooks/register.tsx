@@ -13,6 +13,10 @@ const trend = atom({ plugin: 'context-meter', key: 'trend' } as const, [])
 const frame = atom({ plugin: 'context-meter', key: 'frame' } as const, 0)
 const awakeTick = atom({ plugin: 'context-meter', key: 'awakeTick' } as const, 0)
 const showDetails = atom({ plugin: 'context-meter', key: 'showDetails' } as const, false)
+const readError = atom({ plugin: 'context-meter', key: 'readError' } as const, null as string | null)
+const hasMono = atom({ plugin: 'context-meter', key: 'hasMono' } as const, false)
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 /**
  * Clawd, the Claude Code mascot, as the welcome banner draws him.
@@ -551,6 +555,25 @@ export function resetText(resetsAt: string | undefined, now: number): string | u
   return `resets ${ms < 60_000 ? '<1m' : duration(ms)}`
 }
 
+/** The first engine whose Text takes `mono`. Older ones refuse a tree naming it and draw no band. */
+const MONO_SINCE = [2, 1, 299]
+
+/**
+ * Whether an engine of release `base` (`2.1.300`, `2.1.300-dev`) takes Text's `mono` prop.
+ * Claude Code Desktop bundles its own engine (2.1.295 on 2026-10-15), so this varies by
+ * surface. An unknown version counts as too old.
+ */
+export function takesMono(base: string | undefined): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(base ?? '')
+  if (m === null) return false
+  for (let i = 0; i < 3; i++) {
+    const have = Number(m[i + 1])
+    const need = MONO_SINCE[i] ?? 0
+    if (have !== need) return have > need
+  }
+  return true
+}
+
 const LIMIT_NAMES: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' }
 
 type EffortBadge = {
@@ -1012,9 +1035,17 @@ async function refresh($: EngineInterface, opts: RefreshOptions = {}): Promise<b
     if ((isFresh || opts.isTurnEnd) && tokens !== undefined) {
       await update($, trend, t => (t[t.length - 1] === tokens ? t : [...t, tokens].slice(-TREND_KEEP)))
     }
+    await update($, readError, e => (e === null ? e : null))
     return true
-  } catch {
-    // usage unavailable (no session bound yet): keep the last reading
+  } catch (err) {
+    // usage unavailable (no session bound yet): keep the last reading, and say why
+    const why = errorText(err)
+    try {
+      await update($, readError, e => (e === why ? e : why))
+      $.ui.log(`context-meter: reading failed: ${why}`, { to: 'debug' })
+    } catch {
+      // drawing state is best effort
+    }
     return false
   }
 }
@@ -1144,6 +1175,24 @@ export const register: Register = on => {
     // The REPL starts on the terminal; `-p` and the SDK start drawing nowhere, and Claude Code
     // Desktop attaches later (session.attach).
     isDrawn = (e.surface !== null && BAND_SURFACES.has(e.surface)) || (await isBandSurfaceAttached($))
+    // Text's `mono` prop exists from 2.1.299; an older engine refuses the whole band over it.
+    let version: string | undefined
+    try {
+      const v = await $.session.version()
+      version = v.base ?? v.version
+    } catch {
+      // unknown: no mono
+    }
+    const isMono = takesMono(version)
+    try {
+      await update($, hasMono, m => (m === isMono ? m : isMono))
+      $.ui.log(
+        `context-meter: session.start on ${e.surface ?? 'no surface'}, engine ${version ?? 'unknown'}; drawn: ${isDrawn}; mono: ${isMono}`,
+        { to: 'debug' },
+      )
+    } catch {
+      // drawing state is best effort
+    }
     if (isDrawn) await wake($)
     return next(e)
   })
@@ -1294,18 +1343,21 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
-    const [s, trendTokens, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking] = await Promise.all([
-      read($, snap),
-      read($, trend),
-      read($, frame),
-      read($, showDetails),
-      read($, effort),
-      read($, awakeTick),
-      read($, isPickerOpen),
-      read($, tweenStep),
-      read($, model),
-      read($, isModelPickerOpen),
-    ])
+    const [s, trendTokens, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking, whyNoReading, isMono] =
+      await Promise.all([
+        read($, snap),
+        read($, trend),
+        read($, frame),
+        read($, showDetails),
+        read($, effort),
+        read($, awakeTick),
+        read($, isPickerOpen),
+        read($, tweenStep),
+        read($, model),
+        read($, isModelPickerOpen),
+        read($, readError),
+        read($, hasMono),
+      ])
     // A surface draws the band though none was seen to attach: its work starts, outside this
     // render (a render never writes state).
     if (!isDrawn) {
@@ -1316,18 +1368,31 @@ export const register: Register = on => {
         // the next measure or prompt starts it
       }
     }
-    if (s === null) return next(e)
-    // the clock, not the reading's time, so the session's length runs between readings
-    const now = await $.clock.now().catch(() => s.at)
-
     const table = $.ui.resolve(e)
     const { Box, Button } = table
     // The band is laid out in cells. The terminal is all cells; Claude Code Desktop draws a
-    // Text in its page font unless asked for the monospaced face, so there every Text takes it,
-    // and Clawd is one Svg (block glyphs leave gaps between lines in a page).
+    // Text in its page font unless asked for the monospaced face, so there every Text takes it
+    // where the engine has `mono` (2.1.299 on; an older one refuses the band over it), and
+    // Clawd is one Svg (block glyphs leave gaps between lines in a page).
     const isCells = e.surface === 'terminal'
-    const Text: typeof table.Text = isCells ? table.Text : props => table.Text({ ...props, mono: true })
+    const Text: typeof table.Text = isCells || !isMono ? table.Text : props => table.Text({ ...props, mono: true })
     const Svg = !isCells && 'Svg' in table ? table.Svg : undefined
+
+    // No reading yet: one line, so a surface where readings fail says why instead of drawing nothing.
+    if (s === null) {
+      return (
+        <Box key="context-meter" flexDirection="row" overflow="hidden">
+          <Text bold color="claude">
+            {METER_LABEL}
+          </Text>
+          <Text dimColor={whyNoReading === null} color={whyNoReading === null ? undefined : 'warning'}>
+            {whyNoReading === null ? WAITING : `reading failed on ${e.surface}: ${whyNoReading}`}
+          </Text>
+        </Box>
+      )
+    }
+    // the clock, not the reading's time, so the session's length runs between readings
+    const now = await $.clock.now().catch(() => s.at)
     const isWorking = e.props.isWorking
     const columns = e.props.bodyColumns
     // A changed number counts from its old value to the new one while `step` runs.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-context-meter is a Claude Code **mod**: a hooks-module plugin (no build step, no package.json) that draws a live band above the prompt with the context window's fill bar, tokens, auto-compact headroom, trend, cost and rate limits, plus a model picker, an effort picker and Clawd the mascot. The repo is also its own marketplace (`/plugin install context-meter --marketplace Krs7N/context-meter`). It runs on Claude Code 2.1.296+ and was last worked on 2.1.300. The plugin API is early access and changes between releases.
+context-meter is a Claude Code **mod**: a hooks-module plugin (no build step, no package.json) that draws a live band above the prompt with the context window's fill bar, tokens, auto-compact headroom, trend, cost and rate limits, plus a model picker, an effort picker and Clawd the mascot. The repo is also its own marketplace (`/plugin install context-meter --marketplace Krs7N/context-meter`). It runs on Claude Code 2.1.295+ (Claude Code Desktop's bundled engine) and was last worked on 2.1.300. The plugin API is early access and changes between releases.
 
 ## Commands
 
@@ -57,7 +57,8 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
 - Gating hooks (`command.run`, `session.compact`) carry `.catch(($, e, next) => next(e))` so a failure in the mod never blocks the command.
 - `AbovePrompt` is raised on the **terminal** (Ink) and **desktop** (Claude Code Desktop, drawn over the wire with its own element table) surfaces only, never on mobile, VS Code, `claude -p` or cloud sessions. `e.surface` says which one is drawing.
 - **Desktop differs from the terminal.**
-  - Desktop draws `Text` as a span in its page font unless the Text has `mono`, so the render hook wraps `Text` to add `mono` off the terminal.
+  - Desktop draws `Text` as a span in its page font unless the Text has `mono`, so the render hook wraps `Text` to add `mono` off the terminal, but only where the engine takes it (`hasMono`, set in `session.start` from `$.session.version()` by `takesMono`: 2.1.299 on). An older engine refuses the whole tree (`Text prop "mono" is not allowed`) and draws no band; an unknown version counts as older.
+  - Desktop runs its own bundled engine, not the terminal's (2.1.295 on 2026-10-15): `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\<version>\<hash>\claude.exe`. Run that binary's `plugin test context-meter` to check the mod against it. There, the tests that fake a 2.1.300 engine fail by design (its Text refuses `mono`); every other test must pass.
   - Clawd is drawn as one `Svg` (`clawdSvg`, built from the same `clawdRows` cells). Block glyphs leave gaps between lines in a page.
   - An Svg is isolated from the theme, so colours are hex: Claude Code's dark theme (`SVG_DARK`), switched to its light theme (`SVG_LIGHT`) on a light page through `prefers-color-scheme`.
   - Clawd must match Claude Code's welcome banner: what a glyph leaves empty (his open eyes in `▛`/`▜`) shows the background on both surfaces. So his eyes are white on a light theme, as the banner's are; don't fill them.
