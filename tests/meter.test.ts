@@ -19,6 +19,7 @@ import {
   parseEffortCommand,
   parseEffortOutput,
   savedEffort,
+  resetText,
   sparkline,
   trendText,
   tween,
@@ -152,6 +153,17 @@ describe('formatting', () => {
     expect(duration(3 * 3_600_000 + 5 * 60_000)).toBe('3h 5m')
     // a resumed session counts from its first launch, days ago
     expect(duration(26 * 3_600_000 + 5 * 60_000)).toBe('1d 2h')
+  })
+
+  test('when a rate-limit window resets', async () => {
+    const now = Date.parse('2026-10-15T12:00:00Z')
+    expect(resetText('2026-10-15T14:14:30Z', now)).toBe('resets 2h 14m')
+    expect(resetText('2026-10-18T16:00:00Z', now)).toBe('resets 3d 4h')
+    expect(resetText('2026-10-15T12:00:20Z', now)).toBe('resets <1m')
+    // a reading from before the reset, or none, says nothing
+    expect(resetText('2026-10-15T11:59:00Z', now)).toBeUndefined()
+    expect(resetText(undefined, now)).toBeUndefined()
+    expect(resetText('soon', now)).toBeUndefined()
   })
 
   test('a trend with no window shows tokens', async () => {
@@ -360,8 +372,8 @@ describe('nothing is cut mid-figure', () => {
     const reading = (): SessionUsage => ({
       ...usageIn(200_000, tokens, breakdownOf({ window: 200_000, tokens, compactAt: 167_000 })),
       rateLimits: [
-        { kind: 'five_hour', percentUsed: 23 },
-        { kind: 'seven_day', percentUsed: 41 },
+        { kind: 'five_hour', percentUsed: 23, resetsAt: new Date(600_000 + 2 * 3_600_000).toISOString() },
+        { kind: 'seven_day', percentUsed: 41, resetsAt: new Date(600_000 + 4 * 86_400_000).toISOString() },
       ],
       cost: { usd: 12.5 },
     })
@@ -387,12 +399,17 @@ describe('nothing is cut mid-figure', () => {
       if (columns === 80) expect(row2).toMatch(/^┊ [\d.]+k left/)
       // row 3 ends with " · details"
       expect([...row3].length, `${columns} columns: "${row3}" in ${room - 10} cells`).toBeLessThanOrEqual(room - 10)
+      // the resets give way before the session's length, the 7d's first; the percents stay
+      if (/resets/.test(row3)) expect(row3).toMatch(/^session /)
+      if (/7d 41% resets/.test(row3)) expect(row3).toMatch(/5h 23% resets/)
       await ui.unmount()
     }
     // with room enough, every figure shows
     const wide = await band($, 200)
     expect(drawn(await wide.find({ key: 'line2' }))).toMatch(/auto-compact at 167\.0k .* · last turn \+9\.0k · trend /)
-    expect(drawn(await wide.find({ key: 'line3segs' }))).toMatch(/session 10m · \$12\.50 · 5h 23% · 7d 41%/)
+    expect(drawn(await wide.find({ key: 'line3segs' }))).toMatch(
+      /session 10m · \$12\.50 · 5h 23% resets 1h 59m · 7d 41% resets 3d 23h/,
+    )
     await wide.unmount()
   })
 })
@@ -1208,16 +1225,25 @@ describe('readings', () => {
   })
 
   // 2 minutes of the 100 ms timer
-  test('the session clock runs between readings', { timeoutMs: 20_000 }, async ($, on) => {
-    on('session.usage', () => ({ value: usage(50_000, 25) }))
+  test('the session clock and the rate limits’ resets run between readings', { timeoutMs: 20_000 }, async ($, on) => {
+    const at = (ms: number) => new Date(600_000 + ms).toISOString()
+    on('session.usage', () => ({
+      value: {
+        ...usage(50_000, 25),
+        rateLimits: [
+          { kind: 'five_hour', percentUsed: 23, resetsAt: at((2 * 60 + 14) * 60_000 + 30_000) },
+          { kind: 'seven_day', percentUsed: 41, resetsAt: at((3 * 24 + 4) * 3_600_000 + 30_000) },
+        ],
+      },
+    }))
     on('session.start', () => ({ cwd: '.' }))
     const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
     const ui = await band($, 140)
-    expect(await ui.find({ type: 'Text', text: /session 10m/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /session 10m · \$1\.50 · 5h 23% resets 2h 14m · 7d 41% resets 3d 4h/ })).toBeDefined()
     // the band redraws on Clawd's frames, every 0.7 s: one more frame lands past the minute
     await clock.advance(2 * 60_000 + 700)
-    expect(await ui.find({ type: 'Text', text: /session 12m/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /session 12m .* 5h 23% resets 2h 12m · 7d 41% resets 3d 3h/ })).toBeDefined()
     await ui.unmount()
   })
 

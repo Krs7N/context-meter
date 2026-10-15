@@ -2,8 +2,9 @@
 
 See your context window fill up as you work, without typing `/context`. A live band
 above the prompt shows an animated fill bar, the token count, headroom before
-auto-compaction, the usage trend, session cost and rate limits. It also has a one-click
-effort picker and Clawd, who types while Claude works, dresses up for the effort level and naps when you're idle.
+auto-compaction, the usage trend, the session's length and cost, and the rate limits with
+when each resets. It also has one-click model and effort pickers and Clawd, who types while
+Claude works, dresses up for the effort level and naps when you're idle.
 
 ![context-meter above the Claude Code prompt, with the details row and the effort picker open](docs/context-meter.png)
 
@@ -42,7 +43,7 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 | --- | --- | --- |
 | 1 | `Context` + fill bar + percent + `tokens / window`; model badge and effort badge on the right | `$.session.usage().context` (`tokens`, `window`, `percent`); model and effort: see below |
 | 2 | in this order, each only when it applies: `! 150.0k over the 200.0k window: next send compacts` (or `: /compact before sending` with auto-compaction off), in red; `window 1.00M → 200.0k` for about 10 s after a model switch; `┊ auto-compact at 167.0k (83.0k left)` (the same `┊` as on the bar); the turn: `this turn +12.0k` while Claude works, `compacted 182.0k → 31.0k` after a compaction, else `last turn +3.2k`; fill trend `trend ▁▂▃▅▇ 12→42%` | `context.breakdown`; each main-thread request's usage; the turn ends; `trend` state |
-| 3 | session duration, session cost, rate-limit windows (`5h`, `7d`, `spend`) | `startedAt` and the clock, `cost.usd`, `rateLimits` |
+| 3 | session duration, session cost, rate-limit windows (`5h`, `7d`, `spend`), each with a countdown to its reset: `session 1h 3m · $4.20 · 5h 23% resets 2h 14m · 7d 41% resets 3d 4h` | `startedAt` and the clock, `cost.usd`, `rateLimits` (`percentUsed`, `resetsAt`) |
 | 4 (optional) | the 5 largest used categories, as `/context` splits them | `breakdown.categories` (kind `used`) — toggled by the **details** button |
 
 - Bar color: Claude orange (`claude` theme key), then `warning` and `error` as the fill nears the auto-compact point (from three quarters of the way, and from 95 %). With no auto-compact point known: `warning` from 60 %, `error` from 80 % of the window (`fillColor`).
@@ -58,7 +59,8 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - Nothing is cut mid-figure. Where a row lacks room it leaves out whole pieces:
   - the meter row drops the word `tokens`, then `Context`, then the window, then the token count, and the bar shrinks last;
   - row 2 shortens `┊ auto-compact at 167.0k (83.0k left)` to `┊ 83.0k left`, then leaves out the trend, then the turn's growth;
-  - row 3 leaves out the session's length first, then the rate limits, the cost last.
+  - row 3 first drops each window's reset countdown (the `7d` one first) and keeps its percent, then leaves out the session's length, then the rate limits, the cost last.
+- The session clock and the reset countdowns run between readings. A window whose reset time is unknown or already past shows its percent alone.
 - Before the first reply of a session (or right after `/clear`) the token count shows "waiting for the first reply". Right after a compaction it shows what the compaction left, `~31.0k / 200.0k tokens`, until the next reply.
 - `/clear` and `/resume` start the meter over: no growth or trend is measured against the conversation before.
 - In Claude Code Desktop the band's text is set in the monospaced face and Clawd is drawn as one picture (`clawdSvg`), so he looks as he does in the terminal; the badges and picker options are Desktop's own buttons.
@@ -177,6 +179,6 @@ claude plugin validate context-meter
 claude plugin test context-meter
 ```
 
-Type-check: once Claude Code has loaded the mod (`claude --plugin-dir ./context-meter`), `.claude-plugin/types/` holds the engine's types (gitignored) and `npx -p typescript tsc -p context-meter` works.
+Type-check: once Claude Code has loaded the mod (`claude --plugin-dir ./context-meter`), `.claude-plugin/types/` holds the engine's types (gitignored) and `npx -y -p typescript@5.6.3 tsc -p context-meter` works.
 
-Releasing: bump `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, add a `CHANGELOG.md` entry, then commit and push. Installed copies pick it up with `/plugin update context-meter`.
+Releasing: bump `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, add a `CHANGELOG.md` entry, commit, merge to `main` and push, then tag `vX.Y.Z` and publish the GitHub release. Installed copies pick it up with `/plugin update context-meter`.

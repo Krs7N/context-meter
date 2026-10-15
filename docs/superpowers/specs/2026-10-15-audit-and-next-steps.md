@@ -143,7 +143,7 @@ Each builds on data this batch adds. Sizes are rough.
 | 2 | Window and fit in the model picker | `◇ Sonnet 5.5 · 200k · needs compact` before switching | Medium | Learn each model's window in `$.store`; answers the 1M-variant question |
 | 3 | Cache-cold warning | After idling past the prompt-cache lifetime: `next send re-caches 412k`; cache-hit % per request | Small–medium | The cache lifetime is not in the API; make it an option |
 | 4 | Compaction count | Number of compactions this session, beside the chip this batch adds | Small | |
-| 5 | Rate-limit reset countdown | `5h 72% · resets 1h20m`; one notification each at 80% and 95% | Small | `resetsAt` is already stored |
+| 5 | Rate-limit reset countdown | `5h 72% · resets 1h20m`; one notification each at 80% and 95% | Small | Countdown shipped in 0.3.2 as `5h 72% resets 1h 20m`; the notifications are still open |
 | 6 | Settings in `/config` (`userConfig`) | Animation off, hide Clawd, sleep timeout, colour thresholds | Medium | Touches many places |
 | 7 | `/context` grid pane | `details` opens a pane drawing the breakdown's grid as one `Raster` | Medium | Docked only in fullscreen |
 | 8 | Session summary toast | On `/clear` or exit: time, cost, peak %, compactions | Small | |

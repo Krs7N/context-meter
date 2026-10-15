@@ -541,6 +541,16 @@ export function duration(ms: number): string {
   return h > 0 ? `${h}h ${minutes % 60}m` : `${minutes}m`
 }
 
+/**
+ * "resets 2h 14m": how long until a rate-limit window resets (`resetsAt`, ISO 8601), under a
+ * minute "resets <1m". Nothing when the time is unknown, unreadable or already past.
+ */
+export function resetText(resetsAt: string | undefined, now: number): string | undefined {
+  const ms = resetsAt === undefined ? NaN : Date.parse(resetsAt) - now
+  if (!(ms > 0)) return undefined
+  return `resets ${ms < 60_000 ? '<1m' : duration(ms)}`
+}
+
 const LIMIT_NAMES: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' }
 
 type EffortBadge = {
@@ -1566,8 +1576,8 @@ export const register: Register = on => {
     }
 
     // Rows 2 and 3 keep what fits whole, leaving out the least important groups first (the
-    // lowest rank): in row 2 the trend, then the turn's growth; in row 3 the session's length,
-    // then the rate limits, the cost last.
+    // lowest rank): in row 2 the trend, then the turn's growth; in row 3 the rate limits'
+    // resets go first (short forms), then the session's length, the rate limits, the cost last.
     const headroom = s.compactAt !== undefined && s.tokens !== undefined ? s.compactAt - s.tokens : undefined
     const line2: Group[] = []
     // Bigger than the window: the next send compacts first, or with auto-compaction off it fails.
@@ -1618,9 +1628,16 @@ export const register: Register = on => {
     if (s.usd !== undefined) line3.push({ segs: [{ text: `$${shown('usd', s.usd).toFixed(2)}`, hl: hl('usd') }], rank: 4 })
     s.limits.forEach((l, i) => {
       const key = `limit:${l.kind}`
+      // short: "5h 23%", without when the window resets
+      const short: Seg[] = [
+        { text: `${LIMIT_NAMES[l.kind] ?? l.kind} ` },
+        { text: `${Math.round(shown(key, l.percentUsed))}%`, hl: hl(key) },
+      ]
+      const resets = resetText(l.resetsAt, now)
       line3.push({
-        segs: [{ text: `${LIMIT_NAMES[l.kind] ?? l.kind} ` }, { text: `${Math.round(shown(key, l.percentUsed))}%`, hl: hl(key) }],
+        segs: resets === undefined ? short : [...short, { text: ` ${resets}` }],
         rank: i === 0 ? 3 : 2,
+        short: resets === undefined ? undefined : short,
       })
     })
     const detailsLabel = isDetailed ? 'hide' : 'details'

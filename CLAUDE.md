@@ -46,7 +46,7 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
 - **Render.** The band redraws when an atom it read changes; `frame` changes every 0.7 s, so the band redraws at least that often. It picks the one-line layout below 72 columns, when the stats column is too narrow for the bar, the percent and the tokens, or when the full band (an open picker included) is taller than `props.maxRows`. Otherwise it draws the full layout: Clawd (`clawdRows`, 13 cells wide in every outfit) beside three stats rows. Elements come from `$.ui.resolve(e)`, never globals.
 - **Room.** Only where a row lacks room does it leave out pieces, whole, never cutting a figure:
   - the meter row (`planMeter`) drops the word `tokens`, then `Context`, then the window;
-  - rows 2 and 3 (`fitGroups`, by rank) shorten the auto-compact point to `┊ 83.0k left` and drop the session's length or the trend first.
+  - rows 2 and 3 (`fitGroups`, by rank) take the short forms first (the auto-compact point becomes `┊ 83.0k left`; each rate limit loses its `resets 2h 14m`, the `7d` one first), then drop the session's length or the trend first.
 
   With room, everything shows. The user confirmed this after first taking it for a permanent removal, so don't revert it to clipping.
 
@@ -83,7 +83,7 @@ Helpers in the test file:
 - The version lives in **both** `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`. The user names each version bump, so don't bump it unasked.
 - `CHANGELOG.md` collects changes under `## Unreleased` until a release. The README screenshot is `docs/context-meter.png`, which the user supplies.
 - Release steps: bump both manifests, move the changelog section under the version, commit, merge to `main`, tag `vX.Y.Z`, then `gh release create`.
-- Design history: `docs/superpowers/specs/` (the audit, its engine facts and the decision guide for what comes next) and `docs/superpowers/plans/`. `handoff.md` holds the current state and next steps; keep it updated at the end of a stage.
+- Design history: `docs/superpowers/specs/` (the audit, its engine facts and the decision guide for what comes next), `docs/superpowers/plans/` and `docs/superpowers/audits/` (the open low and trivial findings).
 
 ## Working with the user
 

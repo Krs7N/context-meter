@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 — 2026-10-15
+
+- Each rate-limit window shows when it resets, counting down beside its percent: `5h 23% resets 2h 14m · 7d 41% resets 3d 4h`. The session's length stays. Where row 3 lacks room, the countdowns go first (the `7d` one first) and the percents stay.
+
 ## 0.3.1 — 2026-10-15
 
 - The meter moves during a turn: each model request updates the fill, and row 2 shows `this turn +12.0k` while Claude works. `last turn` is now the whole turn's growth.
