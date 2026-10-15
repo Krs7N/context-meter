@@ -1012,13 +1012,22 @@ export const register: Register = on => {
     return result
   }).catch(($, e, next) => next(e))
 
-  // A main-thread turn ended (the fill moved), or only the cost or a rate limit did.
+  // The engine measured the session: after each main-thread turn (right after its
+  // turn.complete), and whenever a rate-limit window moves a whole point, mid-turn too, when
+  // `changed` names the context as well. So a measure is a plain reading, never a turn end.
   // Also (re)starts the timer: a /clear ends the session without a new session.start.
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
     startTicker($)
-    const isTurnEnd = e.changed.includes('context')
-    await Promise.all([refresh($, { breakdown: isTurnEnd, isTurnEnd }), refreshEffort($), markActive($)])
+    await Promise.all([refresh($, { breakdown: false }), refreshEffort($), markActive($)])
+    return result
+  })
+
+  // A main-thread turn ended (answered, interrupted, refused or failed): its growth, a
+  // trend point and a fresh breakdown. Subagents' turns are theirs.
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined) await refresh($, { isTurnEnd: true })
     return result
   })
 

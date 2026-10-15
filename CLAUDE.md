@@ -28,12 +28,13 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
 - **Readings.** `refresh($, { breakdown, isTurnEnd, isFresh, stepTokens })` reads `$.session.usage()` and stores `toSnapshot(usage, now, previous, tick, isTurnEnd)`. There are three kinds of reading:
   - **fresh:** there is no previous snapshot (first start, `/clear`, `/resume`). Nothing is highlighted, and `turnBase` is set to the current tokens.
   - **live:** taken after each main-loop request (`turn.step`), with tokens from that response's usage. It never sets `lastDelta` and never adds a trend point.
-  - **turn end:** a `session.measure` whose `changed` includes `context`. It computes `lastDelta = tokens − turnBase`, moves `turnBase`, adds a trend point, and only then reads the breakdown.
+  - **turn end:** a main-loop `turn.complete`. It computes `lastDelta = tokens − turnBase`, moves `turnBase`, adds a trend point, and only then reads the breakdown. Never take turn ends from `session.measure`: the engine raises one right after each `turn.complete`, but also mid-turn whenever a rate-limit window moves a whole point, and then `changed` names the context too.
 
   `changedKeys` / `fromValues` drive the change highlight (`changed`, `changedTick`, about 10 s) and the 6 s count-up (`from`, `tweenStep`). A window change (a model switch) is its own key (`window`), never `percent`.
 - **Hooks.**
   - `session.start`: first reading, starts the ticker, and lands any count-up that a reload interrupted.
-  - `session.measure`: turn ends, plus cost or rate-limit moves.
+  - `turn.complete` (main loop): the turn end.
+  - `session.measure`: a plain reading, with no breakdown.
   - `turn.step`: the effort the request carried, then a live reading.
   - `session.compact`: records before and after, then redraws.
   - `session.end`: `/clear` and `/resume` call `startOver` 300 ms later, because no `session.start` follows them; any other reason stops the ticker.
@@ -67,7 +68,7 @@ Helpers in the test file:
 - `usage` / `usageIn` / `breakdownOf` build readings.
 - `band($, columns, isWorking, maxRows)` mounts the band.
 - `answer` / `request` run a main-loop `turn.step`.
-- `turnEnds` sends a turn-end measure.
+- `turnEnds` ends a turn as the engine does: `turn.complete`, then `session.measure`. A test that uses it answers both events.
 
 `mock.clock(on, { now })` plus `clock.advance(ms)` drives the ticker. Because the band redraws only on 0.7 s frames, a time-based assertion must allow for the frame phase, and a blink check must span a whole 6-frame period.
 

@@ -118,9 +118,11 @@ async function request($: Engine, effort?: TurnStepInput['effort']) {
 const ASKED: SessionMessage = { role: 'user', text: 'fix the meter', toolUses: [] }
 const SUMMARY: SessionMessage = { role: 'user', text: 'Summary: the meter was fixed.', toolUses: [] }
 
-/** A main-thread turn ends: the engine measures the session. */
-const turnEnds = ($: Engine, u: SessionUsage) =>
-  $.session.measure({ context: u.context, rateLimits: u.rateLimits, cost: u.cost, changed: ['context'] })
+/** A main-thread turn ends: the turn completes, then the engine measures the session (the engine's order). */
+const turnEnds = async ($: Engine, u: SessionUsage) => {
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' })
+  return $.session.measure({ context: u.context, rateLimits: u.rateLimits, cost: u.cost, changed: ['context'] })
+}
 
 describe('formatting', () => {
   test('tokens, bar and sparkline', async () => {
@@ -162,6 +164,7 @@ test('band shows fill, tokens, cost and limits; a new reading redraws it', async
   on('session.start', () => ({ cwd: '.' }))
   const clock = mock.clock(on, { now: 600_000 })
   on('session.measure', ($, e) => ({ changed: e.changed }))
+  on('turn.complete', () => ({ text: '' }))
 
   await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
 
@@ -175,7 +178,7 @@ test('band shows fill, tokens, cost and limits; a new reading redraws it', async
   }
 
   current = usage(182_000, 91)
-  await $.session.measure({ context: current.context, rateLimits: current.rateLimits, cost: current.cost, changed: ['context'] })
+  await turnEnds($, current)
 
   const ui = await $.ui.mount({ plugin: 'context-meter', surface: 'terminal', component: 'AbovePrompt', props: props(120) })
   // the changed numbers count up from the old reading…
@@ -639,6 +642,7 @@ describe('model switch', () => {
     on('session.model', () => ({ value: name }) as never)
     on('session.start', () => ({ cwd: '.' }))
     on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
     const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
     current = usageIn(1_000_000, 150_000)
@@ -717,6 +721,7 @@ describe('readings', () => {
     on('session.usage', () => ({ value: current }))
     on('session.start', () => ({ cwd: '.' }))
     on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
     on('turn.step', answer(() => 120_000))
     const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
@@ -735,6 +740,52 @@ describe('readings', () => {
     ui = await band($, 140)
     expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /\+36\.0k/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a rate-limit measure in the middle of a turn is not the turn end', async ($, on) => {
+    let current = usage(40_000, 20)
+    const asked: (string | undefined)[] = []
+    on('session.usage', ($, e) => {
+      asked.push(e?.breakdown)
+      return { value: current }
+    })
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    let context = 50_000
+    on('turn.step', answer(() => context))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    // turn 1: 40k → 50k
+    await request($, 'high')
+    current = usage(50_000, 25)
+    await turnEnds($, current)
+    // turn 2: its first request lands at 80k and moves the 5h window a whole point, so the
+    // engine measures mid-turn, and `changed` names the context too (it moved since the last measure)
+    context = 80_000
+    await request($, 'high')
+    current = { ...usage(80_000, 40), rateLimits: [{ kind: 'five_hour', percentUsed: 24 }] }
+    asked.length = 0
+    await $.session.measure({ context: current.context, rateLimits: current.rateLimits, cost: current.cost, changed: ['context', 'rateLimits'] })
+    // a plain reading: no breakdown mid-turn
+    expect(asked).toEqual([undefined])
+    // its second request lands at 110k, still in the turn
+    context = 110_000
+    await request($, 'high')
+    await clock.advance(7000)
+    let ui = await band($, 160, true)
+    expect(await ui.find({ type: 'Text', text: /this turn/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '+60.0k' })).toBeDefined()
+    await ui.unmount()
+    // the real turn end: the whole turn's growth, and one trend point per turn (40k, 50k, 110k)
+    current = { ...usage(110_000, 55), rateLimits: [{ kind: 'five_hour', percentUsed: 24 }] }
+    await turnEnds($, current)
+    await clock.advance(7000)
+    ui = await band($, 160)
+    expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '+60.0k' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /trend ▁▂█ 20→55%/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -782,6 +833,7 @@ describe('readings', () => {
       on('session.usage', () => ({ value: current }))
       on('session.start', () => ({ cwd: '.' }))
       on('session.measure', ($, e) => ({ changed: e.changed }))
+      on('turn.complete', () => ({ text: '' }))
       on('session.end', ($, e) => ({ sessionId: e.sessionId }))
       const clock = mock.clock(on, { now: 600_000 })
       await $.session.start(START)
@@ -851,6 +903,7 @@ describe('readings', () => {
     on('session.usage', () => ({ value: current }))
     on('session.start', () => ({ cwd: '.' }))
     on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
     on('session.compact', () => ({ messages: [SUMMARY], tokensBefore: 182_000, tokensAfter: 31_000 }))
     on('turn.step', answer(() => context))
     const clock = mock.clock(on, { now: 600_000 })
@@ -879,6 +932,7 @@ describe('readings', () => {
     on('session.usage', () => ({ value: current }))
     on('session.start', () => ({ cwd: '.' }))
     on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
     const clock = mock.clock(on, { now: 600_000 })
     await $.session.start(START)
     current = usage(182_000, 91)
@@ -913,6 +967,7 @@ describe('readings', () => {
     })
     on('session.start', () => ({ cwd: '.' }))
     on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
     mock.clock(on, { now: 600_000 })
     await $.session.start(START)
     asked.length = 0
@@ -925,6 +980,7 @@ describe('readings', () => {
     on('session.usage', () => ({ value: usage(50_000, 25) }))
     on('session.start', () => ({ cwd: '.' }))
     on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
     on('config.list', () => {
       listed++
       return { value: [] } as never
@@ -943,6 +999,7 @@ describe('readings', () => {
     on('session.usage', () => ({ value: usage(50_000, 25) }))
     on('session.start', () => ({ cwd: '.' }))
     on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
     on('config.list', () => {
       listed++
       return { value: [] } as never

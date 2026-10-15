@@ -128,7 +128,8 @@ Every `/effort` writes a line to the debug log (`claude --debug`): `context-mete
 | Event | What happens |
 | --- | --- |
 | `session.start` | first reading; starts the mascot's animation loop |
-| `session.measure` | a turn end (the fill moved): a reading with breakdown, the turn's growth and a trend point; a cost or rate-limit move alone: a plain reading |
+| `turn.complete` | the end of a main-thread turn: a reading with breakdown, the turn's growth and a trend point |
+| `session.measure` | a plain reading, after each turn and whenever a rate-limit window moves (mid-turn too) |
 | `turn.step` | each main-thread request: its effort level, then a live reading from the response's own usage |
 | `session.compact` | a main-conversation compaction: records what it freed and redraws |
 | `session.end` | `/clear` and `/resume`: start the meter over; anything else: stops the animation loop |
