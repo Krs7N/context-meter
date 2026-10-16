@@ -424,16 +424,14 @@ export function sleepTicks(minutes: unknown): number {
 let sleepAfterTicks = sleepTicks(SLEEP_AFTER_MINUTES)
 
 /**
- * Bar color by fill: orange, then `warning` from 60 %, `error` from 80 %. With the
- * auto-compact point known (as a percent of the window), by how near the fill is to
- * it instead: `warning` from three quarters of the way, `error` from 95 %.
+ * Bar color by how far the fill is toward the auto-compact point (as a percent of the
+ * window; with none known, 80 % of it): orange, `warning` from `warnAt` % of the way (three
+ * quarters by default), `error` from `alertAt` % (95).
  */
-export function fillColor(percent: number, compactPercent?: number): string {
-  if (compactPercent !== undefined && compactPercent > 0) {
-    const ratio = percent / compactPercent
-    return ratio >= 0.95 ? 'error' : ratio >= 0.75 ? 'warning' : 'claude'
-  }
-  return percent >= 80 ? 'error' : percent >= 60 ? 'warning' : 'claude'
+export function fillColor(percent: number, compactPercent?: number, warnAt = 75, alertAt = 95): string {
+  const toward = compactPercent !== undefined && compactPercent > 0 ? compactPercent : 80
+  const share = (percent * 100) / toward
+  return share >= alertAt ? 'error' : share >= warnAt ? 'warning' : 'claude'
 }
 
 export type MeterRun = { text: string; kind: 'old' | 'new' | 'empty' | 'mark' }
@@ -964,9 +962,24 @@ async function pickEffort($: EngineInterface, args: string): Promise<void> {
   }
 }
 
-/** The models the picker offers, as `/model <alias>` takes them, smallest first. */
+/** The model families, smallest first: the picker's default entries, as `/model <alias>` takes them. */
 export const MODEL_CHOICES = ['haiku', 'sonnet', 'opus', 'fable'] as const
 type ModelChoice = (typeof MODEL_CHOICES)[number]
+
+/** A picker entry that names a family, with or without the 1M window: `opus`, `opus[1m]`. */
+const FAMILY_ENTRY = /^(haiku|sonnet|opus|fable)(\[1m\])?$/i
+const isLong = (name: string) => /\[1m\]|1m context/i.test(name)
+
+/** Whether a picker entry names the model in use: a family entry by family and window, a model id by its label. */
+function isCurrentModel(entry: string, current: string | null | undefined): boolean {
+  if (!current) return false
+  const m = FAMILY_ENTRY.exec(entry)
+  if (m) return modelFamily(current) === m[1]?.toLowerCase() && isLong(entry) === isLong(current)
+  return /^claude-/i.test(entry) && modelLabel(entry) === modelLabel(current)
+}
+
+/** A picker entry as it reads: a family or model id as the badge names it (`Opus · 1M`), any other alias as given (`best`). */
+const entryLabel = (entry: string) => (FAMILY_ENTRY.test(entry) || /^claude-/i.test(entry) ? modelLabel(entry) : entry)
 
 /** Which family a model name or id belongs to ("claude-opus-5-5", "Opus 5.5" → "opus"). */
 export function modelFamily(name: string | null | undefined): ModelChoice | undefined {
@@ -1028,12 +1041,12 @@ async function refreshModel($: EngineInterface): Promise<void> {
  * keeps the old model (it answers "Kept model as …"), the mod says so; typing the
  * command answers the same, so it suggests nothing.
  */
-async function pickModel($: EngineInterface, alias: ModelChoice): Promise<void> {
+async function pickModel($: EngineInterface, alias: string): Promise<void> {
   await update($, isModelPickerOpen, () => false)
   try {
     const result = await $.command.run({ command: 'model', args: alias })
     const name = parseModelOutput(result.text)
-    if (/kept model as/i.test(result.text ?? '') && modelFamily(name) !== alias) {
+    if (/kept model as/i.test(result.text ?? '') && !isCurrentModel(alias, name)) {
       await $.ui.toast(`Claude Code kept ${modelLabel(name)}: /model ${alias} did not switch`)
     }
     // the engine's answer, not the command's text: writing that here would hide the switch from refreshModel
@@ -1230,7 +1243,7 @@ async function refresh($: EngineInterface, opts: RefreshOptions = {}): Promise<b
         previous !== null && next.changedTick === tick && next.changed.length > 0 && next.changed !== previous.changed
       return next
     })
-    if (isChanged) await startCountUp($, opts.stepTokens === undefined ? 1 : LIVE_STRIDE)
+    if (isChanged && !settings.reduceMotion) await startCountUp($, opts.stepTokens === undefined ? 1 : LIVE_STRIDE)
     await update($, pace, p => withReadings(p, usage.rateLimits, now))
     const tokens = usage.context.tokens
     if ((isFresh || opts.isTurnEnd) && tokens !== undefined) {
@@ -1489,8 +1502,68 @@ async function markActive($: EngineInterface): Promise<void> {
   }
 }
 
+/** The mod's `/config` options (plugin.json `userConfig`) as the band uses them. */
+export type Settings = {
+  showClawd: boolean
+  /** No count-up; Clawd neither types, blinks nor shakes (his face and colour still follow the bar). */
+  reduceMotion: boolean
+  /** `one-line`: the one-line meter at every size. */
+  layout: 'auto' | 'one-line'
+  showCost: boolean
+  showRateLimits: boolean
+  showCompactButton: boolean
+  /** How far toward auto-compact, in percent, the bar (and Clawd) turns amber, and red. */
+  warnAt: number
+  alertAt: number
+  /** The cache's lifetime: `auto` learns it from the requests (`ttlFrom`). */
+  cacheLifetime: 'auto' | CacheTtl
+  /** The model picker's entries, as `/model` takes them. */
+  models: string[]
+}
+
+/** A model as `/model` takes it: an alias or id, with `[1m]` for the 1M window. */
+const MODEL_ENTRY = /^[a-z0-9][a-z0-9.-]*(\[1m\])?$/i
+
+/**
+ * The options as the band uses them; one missing or out of range keeps its default, and
+ * thresholds out of order both keep theirs. `models` is a list split on commas or spaces,
+ * each entry once.
+ */
+export function settingsFrom(o: Readonly<Record<string, unknown>> | undefined): Settings {
+  const bool = (key: string, d: boolean) => {
+    const v = o?.[key]
+    return typeof v === 'boolean' ? v : d
+  }
+  const pick = <T extends string>(key: string, choices: readonly T[], d: T): T => {
+    const v = o?.[key]
+    return choices.find(c => c === v) ?? d
+  }
+  const share = (key: string) => {
+    const v = o?.[key]
+    return typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 100 ? v : undefined
+  }
+  const warnAt = share('warnAt') ?? 75
+  const alertAt = share('alertAt') ?? 95
+  const listed = typeof o?.models === 'string' ? o.models.split(/[\s,]+/).filter(m => MODEL_ENTRY.test(m)) : []
+  return {
+    showClawd: bool('showClawd', true),
+    reduceMotion: bool('reduceMotion', false),
+    layout: pick('layout', ['auto', 'one-line'] as const, 'auto'),
+    showCost: bool('showCost', true),
+    showRateLimits: bool('showRateLimits', true),
+    showCompactButton: bool('showCompactButton', true),
+    ...(alertAt >= warnAt ? { warnAt, alertAt } : { warnAt: 75, alertAt: 95 }),
+    cacheLifetime: pick('cacheLifetime', ['auto', '5m', '1h'] as const, 'auto'),
+    models: listed.length > 0 ? [...new Set(listed)] : [...MODEL_CHOICES],
+  }
+}
+
+/** Set from the plugin's options each time the module loads (a settings change reloads it). */
+let settings = settingsFrom(undefined)
+
 export const register: Register = (on, options) => {
   sleepAfterTicks = sleepTicks(options?.sleepAfterMinutes)
+  settings = settingsFrom(options)
 
   on('session.start', async ($, e, next) => {
     // A reload drops the module's count-up step but not the state's: land any count-up
@@ -1669,7 +1742,7 @@ export const register: Register = (on, options) => {
       eff,
       awake,
       isPicking,
-      step,
+      stepAt,
       modelName,
       isModelPicking,
       whyNoReading,
@@ -1733,7 +1806,9 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now().catch(() => s.at)
     const isWorking = e.props.isWorking
     const columns = e.props.bodyColumns
-    // A changed number counts from its old value to the new one while `step` runs.
+    // A changed number counts from its old value to the new one while `step` runs; with motion
+    // reduced it is there at once.
+    const step = settings.reduceMotion ? TWEEN_STEPS : stepAt
     const shown = (key: string, to: number) => {
       const from = s.from[key]
       return from === undefined || !s.changed.includes(key) ? to : tween(from, to, step)
@@ -1744,7 +1819,7 @@ export const register: Register = (on, options) => {
       s.percent ?? (compactedTo !== undefined && s.window > 0 ? Math.round((compactedTo / s.window) * 100) : 0)
     const percent = Math.round(shown('percent', fillPercent))
     const compactPercent = s.compactAt !== undefined && s.window > 0 ? (s.compactAt / s.window) * 100 : undefined
-    const fill = fillColor(percent, compactPercent)
+    const fill = fillColor(percent, compactPercent, settings.warnAt, settings.alertAt)
     // The engine caps the percent at 100: a context bigger than the window (after a switch
     // to a smaller one) is told apart by its tokens.
     const over = s.tokens !== undefined && s.window > 0 && s.tokens > s.window ? s.tokens - s.window : undefined
@@ -1754,10 +1829,13 @@ export const register: Register = (on, options) => {
     // Clawd takes the bar's colour. Fuming, his eyes are squeezed shut already, so he does not
     // blink, and while awake he shakes, a cell to one side each frame.
     const mood = moodFor(fill)
-    const isBlinking = !isAsleep && mood !== 'fuming' && tick % BLINK_EVERY === BLINK_EVERY - 1
-    const typing = isWorking ? tick : undefined
-    const shake = mood === 'fuming' && !isAsleep ? (tick % 2 === 0 ? -1 : 1) : 0
-    const zzz = isAsleep ? CLAWD.zzz[Math.floor((idleTicks - sleepAfterTicks) / 2) % CLAWD.zzz.length] : undefined
+    // With motion reduced he keeps still: no blink, no typing, no shaking, a zZ that does not grow.
+    const isStill = settings.reduceMotion
+    const isBlinking = !isStill && !isAsleep && mood !== 'fuming' && tick % BLINK_EVERY === BLINK_EVERY - 1
+    const typing = isWorking && !isStill ? tick : undefined
+    const shake = mood === 'fuming' && !isAsleep && !isStill ? (tick % 2 === 0 ? -1 : 1) : 0
+    const zzzAt = isStill ? CLAWD.zzz.length - 2 : Math.floor((idleTicks - sleepAfterTicks) / 2) % CLAWD.zzz.length
+    const zzz = isAsleep ? CLAWD.zzz[zzzAt] : undefined
     const clawd = clawdRows({
       outfit: outfitFor(eff),
       isShut: isAsleep || isBlinking,
@@ -1776,10 +1854,10 @@ export const register: Register = (on, options) => {
     const above = isPicking && at >= 0 ? levels.slice(0, at) : []
     const below = isPicking ? [...levels.slice(at + 1), 'ultracode' as const] : []
     // The model picker works the same way: smaller models above the badge, larger ones below.
-    const family = modelFamily(modelName ?? s.model)
-    const mAt = MODEL_CHOICES.findIndex(c => c === family)
-    const mAbove = isModelPicking && mAt >= 0 ? MODEL_CHOICES.slice(0, mAt) : []
-    const mBelow = isModelPicking ? MODEL_CHOICES.slice(mAt + 1) : []
+    const models = settings.models
+    const mAt = models.findIndex(m => isCurrentModel(m, modelName ?? s.model))
+    const mAbove = isModelPicking && mAt >= 0 ? models.slice(0, mAt) : []
+    const mBelow = isModelPicking ? models.slice(mAt + 1) : []
     // An open picker column is as tall as its badge and choices.
     const pickerRows = 1 + Math.max(above.length + below.length, mAbove.length + mBelow.length)
 
@@ -1805,7 +1883,7 @@ export const register: Register = (on, options) => {
         args: isUltraOff ? 'ultracode off' : choice,
       }
     }
-    const modelChoiceText = (choice: ModelChoice) => `◇ ${modelLabel(choice)}  `
+    const modelChoiceText = (choice: string) => `◇ ${entryLabel(choice)}  `
     const pickerCells =
       Math.max(cellsOf(modelText) + 2, ...[...mAbove, ...mBelow].map(c => cellsOf(modelChoiceText(c)))) +
       2 +
@@ -1826,11 +1904,16 @@ export const register: Register = (on, options) => {
     // pickers. A slot that cannot hold the band (a short fullscreen terminal), or a stats column
     // too narrow for the bar, the percent and the tokens, gets the one-line meter instead. Where
     // even a picker column does not fit the slot, its choices go in a row.
-    const fullRows = Math.max(clawd.length, 3 + (hasCategories ? 1 : 0), pickerRows) + 2
-    const statsCells = columns - 21 - pickerCells
+    const fullRows = Math.max(settings.showClawd ? clawd.length : 0, 3 + (hasCategories ? 1 : 0), pickerRows) + 2
+    // without Clawd, only the border and padding (4) and the gap before the pickers (2)
+    const statsCells = columns - (settings.showClawd ? 21 : 6) - pickerCells
     const fullPlan = planMeter(statsCells, tokensCells)
     const isCompact =
-      columns < 72 || fullPlan.tokens === 'none' || fullPlan.bar < MIN_BAR || fullRows > e.props.maxRows
+      settings.layout === 'one-line' ||
+      columns < 72 ||
+      fullPlan.tokens === 'none' ||
+      fullPlan.bar < MIN_BAR ||
+      fullRows > e.props.maxRows
     const isPickerRow = pickerRows > e.props.maxRows
     const pickerDirection = isPickerRow ? 'row' : 'column'
     const plan = isCompact ? planMeter(columns - pickerCells, tokensCells) : fullPlan
@@ -1949,7 +2032,7 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    const modelButton = (choice: ModelChoice) => (
+    const modelButton = (choice: string) => (
       <Button key={`model-${choice}`} plain label={choice} onPress={() => pickModel($, choice)}>
         <Text color="text">{modelChoiceText(choice)}</Text>
       </Button>
@@ -2011,7 +2094,7 @@ export const register: Register = (on, options) => {
     // Idle past the cache's lifetime (an hour until a request showed it): the next send writes
     // the whole context to the cache again.
     const idleMs = lastReply.repliedAt === undefined ? undefined : now - lastReply.repliedAt
-    if (!isWorking && idleMs !== undefined && idleMs >= TTL_MS[ttl ?? '1h'] && s.tokens !== undefined) {
+    if (!isWorking && idleMs !== undefined && idleMs >= TTL_MS[settings.cacheLifetime === 'auto' ? (ttl ?? '1h') : settings.cacheLifetime] && s.tokens !== undefined) {
       line2.push({
         segs: [{ text: `cache cold: next send re-writes ${fmtTokens(s.tokens)}`, color: 'warning' }],
         rank: 4,
@@ -2088,10 +2171,11 @@ export const register: Register = (on, options) => {
     }
 
     const line3: Group[] = [{ segs: [{ text: `session ${duration(now - s.startedAt)}` }], rank: 1 }]
-    if (s.usd !== undefined) line3.push({ segs: [hlSeg('usd', `$${shown('usd', s.usd).toFixed(2)}`)], rank: 4 })
+    if (settings.showCost && s.usd !== undefined) line3.push({ segs: [hlSeg('usd', `$${shown('usd', s.usd).toFixed(2)}`)], rank: 4 })
     // how much of the last main request the cache served; first to go where room is short
     if (lastReply.hit !== undefined) line3.push({ segs: [{ text: `cache ${Math.round(lastReply.hit * 100)}%` }], rank: 1 })
-    s.limits.forEach((l, i) => {
+    const limits = settings.showRateLimits ? s.limits : []
+    limits.forEach((l, i) => {
       const key = `limit:${l.kind}`
       // At the recent pace it runs out before it resets: "5h 72% full in ~48m", in red.
       const full = fullIn(paces[l.kind], now)
@@ -2113,7 +2197,8 @@ export const register: Register = (on, options) => {
     const detailsLabel = isDetailed ? 'hide' : 'details'
     // Once the bar warns (or the context is over the window), a button to compact now, after a
     // confirm; not while Claude works. A compaction it started shows until it ends.
-    const canCompact = !isWorking && s.tokens !== undefined && (fill !== 'claude' || over !== undefined)
+    const canCompact =
+      settings.showCompactButton && !isWorking && s.tokens !== undefined && (fill !== 'claude' || over !== undefined)
     const compactShown = compactAsked === 'running' ? 'running' : canCompact ? compactAsked : undefined
     const compactText =
       compactShown === 'running'
@@ -2140,24 +2225,26 @@ export const register: Register = (on, options) => {
 
     return (
       <Box key="context-meter" borderStyle="round" borderColor="claude" paddingX={1} flexDirection="row" gap={2}>
-        <Box key="clawd" flexDirection="column" flexShrink={0}>
-          {Svg ? (
-            <Svg
-              {...clawdSvg(clawd)}
-              alt={`Clawd${mood === 'calm' ? '' : `, ${mood}`}${isAsleep ? ', asleep' : isWorking ? ', typing' : ''}`}
-            />
-          ) : (
-            clawd.map((row, r) => (
-              <Box key={`clawd${r}`} flexDirection="row">
-                {row.map((p, i) => (
-                  <Text key={`c${r}-${i}`} color={p.color} backgroundColor={p.bg} bold={p.bold}>
-                    {p.text}
-                  </Text>
-                ))}
-              </Box>
-            ))
-          )}
-        </Box>
+        {settings.showClawd ? (
+          <Box key="clawd" flexDirection="column" flexShrink={0}>
+            {Svg ? (
+              <Svg
+                {...clawdSvg(clawd)}
+                alt={`Clawd${mood === 'calm' ? '' : `, ${mood}`}${isAsleep ? ', asleep' : isWorking ? ', typing' : ''}`}
+              />
+            ) : (
+              clawd.map((row, r) => (
+                <Box key={`clawd${r}`} flexDirection="row">
+                  {row.map((p, i) => (
+                    <Text key={`c${r}-${i}`} color={p.color} backgroundColor={p.bg} bold={p.bold}>
+                      {p.text}
+                    </Text>
+                  ))}
+                </Box>
+              ))
+            )}
+          </Box>
+        ) : null}
         <Box key="stats" flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
           {meter}
           {row('line2', fitGroups(line2, statsCells))}

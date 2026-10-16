@@ -31,6 +31,7 @@ import {
   fullIn,
   withReadings,
   ttlFrom,
+  settingsFrom,
 } from '../hooks/register'
 
 const usage = (tokens: number, percent: number): SessionUsage => ({
@@ -2014,6 +2015,200 @@ describe('compact button', () => {
     await ui.press({ key: 'compact-yes' })
     expect(toasts).toEqual(['Not compacted: a hook kept the conversation as it is'])
     expect(await ui.find({ key: 'compact' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('settings', () => {
+  const MODELS = ['haiku', 'sonnet', 'opus', 'fable']
+
+  test('defaults, and a bad value keeps its default', async () => {
+    expect(settingsFrom(undefined)).toEqual({
+      showClawd: true,
+      reduceMotion: false,
+      layout: 'auto',
+      showCost: true,
+      showRateLimits: true,
+      showCompactButton: true,
+      warnAt: 75,
+      alertAt: 95,
+      cacheLifetime: 'auto',
+      models: MODELS,
+    })
+    expect(
+      settingsFrom({ layout: 'tall', cacheLifetime: '2h', warnAt: 0, alertAt: 120, models: ' , ', showClawd: 'no' }),
+    ).toMatchObject({ layout: 'auto', cacheLifetime: 'auto', warnAt: 75, alertAt: 95, models: MODELS, showClawd: true })
+    // an alert before the warning: both keep their defaults
+    expect(settingsFrom({ warnAt: 90, alertAt: 80 })).toMatchObject({ warnAt: 75, alertAt: 95 })
+    expect(settingsFrom({ warnAt: 50, alertAt: 50 })).toMatchObject({ warnAt: 50, alertAt: 50 })
+    // models as /model takes them, once each, in order
+    expect(settingsFrom({ models: 'sonnet, opus[1m] best opus[1m] -x claude-opus-4-1' }).models).toEqual([
+      'sonnet',
+      'opus[1m]',
+      'best',
+      'claude-opus-4-1',
+    ])
+  })
+
+  test('the bar’s thresholds, toward auto-compact or with none known toward 80% of the window', async () => {
+    expect(fillColor(24, 50, 50, 60)).toBe('claude')
+    expect(fillColor(25, 50, 50, 60)).toBe('warning')
+    expect(fillColor(30, 50, 50, 60)).toBe('error')
+    expect(fillColor(39, undefined, 50, 60)).toBe('claude')
+    expect(fillColor(40, undefined, 50, 60)).toBe('warning')
+    expect(fillColor(48, undefined, 50, 60)).toBe('error')
+  })
+
+  test('with Clawd hidden the stats stand alone', { options: { showClawd: false } }, async ($, on) => {
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 120)
+    expect(await ui.find({ key: 'clawd' })).toBeUndefined()
+    expect(await ui.find({ key: 'stats' })).toBeDefined()
+    await ui.unmount()
+    // his 15 cells go to the bar: at 100 columns a 33-cell bar, a 67-cell meter row (beside him 18 and 52)
+    const narrow = await band($, 100)
+    expect([...drawn(await narrow.find({ key: 'fill' }))].length).toBe(67)
+    await narrow.unmount()
+    const desk = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(120) })
+    expect(await desk.find({ type: 'Svg' })).toBeUndefined()
+    expect(await desk.find({ key: 'stats' })).toBeDefined()
+    await desk.unmount()
+  })
+
+  test('with motion reduced numbers land at once and Clawd keeps still', { options: { reduceMotion: true } }, async ($, on) => {
+    let current = usage(84_000, 42)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 120, true)
+    current = usage(170_000, 85)
+    await turnEnds($, current)
+    expect(await ui.find({ type: 'Text', text: /85%/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '170.0k' })).toBeDefined()
+    // working and fuming, yet no typing, blinking or shaking: one drawing every frame
+    const frames = new Set<string>()
+    for (let i = 0; i < 7; i++) {
+      frames.add((await clawdLines(ui)).join('\n'))
+      await clock.advance(700)
+    }
+    expect([...frames]).toHaveLength(1)
+    expect([...frames][0]).toMatch(/▐>███<▌/)
+    await ui.unmount()
+  })
+
+  test('with motion reduced the fast timer never runs', { options: { reduceMotion: true } }, async ($, on) => {
+    let fast = 0
+    on('clock.every', { ms: 100 }, ($, e, next) => {
+      fast++
+      return next(e)
+    })
+    let current = usage(84_000, 42)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    current = usage(120_000, 60)
+    await turnEnds($, current)
+    await clock.advance(7_000)
+    expect(fast).toBe(0)
+  })
+
+  test('the one-line layout everywhere', { options: { layout: 'one-line' } }, async ($, on) => {
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 200)
+    expect(await ui.find({ key: 'stats' })).toBeUndefined()
+    expect(await ui.find({ key: 'clawd' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /25%/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(
+    'cost, rate limits and the compact button can each be hidden',
+    { options: { showCost: false, showRateLimits: false, showCompactButton: false } },
+    async ($, on) => {
+      on('session.usage', () => ({ value: usage(170_000, 85) }))
+      on('session.start', () => ({ cwd: '.' }))
+      mock.clock(on, { now: 600_000 })
+      await $.session.start(START)
+      const ui = await band($, 200)
+      const row3 = drawn(await ui.find({ key: 'line3segs' }))
+      expect(row3).toMatch(/^session /)
+      expect(row3).not.toMatch(/\$|5h/)
+      expect(await ui.find({ key: 'compact' })).toBeUndefined()
+      await ui.unmount()
+    },
+  )
+
+  test('the bar and Clawd follow the thresholds set', { options: { warnAt: 40, alertAt: 50 } }, async ($, on) => {
+    on('session.usage', () => ({ value: usage(84_000, 42) }))
+    on('session.start', () => ({ cwd: '.' }))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 120)
+    // 42% is 52.5% of the way to 80% of the window: past the alert
+    const texts = await ui.findAll({ type: 'Text' })
+    expect(texts[texts.findIndex(t => t.text === 'Context ') + 1]?.props.color).toBe('error')
+    expect((await ui.find({ type: 'Text', text: '▝▜█████▛▘' }))?.props.color).toBe('#e5383b')
+    await ui.unmount()
+  })
+
+  test('a cache lifetime set overrides the one learned', { options: { cacheLifetime: '5m' }, timeoutMs: 30_000 }, async ($, on) => {
+    on('session.usage', () => ({ value: usage(60_000, 30) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answer(() => 60_000))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'high')
+    await clock.advance(5 * 60_000 + 1_000)
+    const ui = await band($, 200)
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/^cache cold/)
+    await ui.unmount()
+  })
+
+  test('an hour set holds over a learned 5 minutes', { options: { cacheLifetime: '1h' }, timeoutMs: 30_000 }, async ($, on) => {
+    mock.store(on, { cacheTtl: '5m' })
+    on('session.usage', () => ({ value: usage(60_000, 30) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answer(() => 60_000))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'high')
+    await clock.advance(6 * 60_000)
+    const ui = await band($, 200)
+    expect(drawn(await ui.find({ key: 'line2' }))).not.toMatch(/cache cold/)
+    await ui.unmount()
+  })
+
+  test('the model picker lists the models set', { options: { models: 'sonnet, opus[1m] best' } }, async ($, on) => {
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.model', () => ({ value: 'claude-opus-5-5' }) as never)
+    const ran: string[] = []
+    on('command.run', { command: 'model' }, ($, e) => {
+      ran.push(e.args)
+      return { text: 'Set model to Opus 5.5 · 1M' } as never
+    })
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 140)
+    await ui.press({ key: 'model' })
+    for (const m of ['sonnet', 'opus[1m]', 'best']) expect(await ui.find({ key: `model-${m}` }), m).toBeDefined()
+    for (const m of ['haiku', 'opus', 'fable']) expect(await ui.find({ key: `model-${m}` }), m).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '◇ Opus · 1M  ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '◇ best  ' })).toBeDefined()
+    await ui.press({ key: 'model-opus[1m]' })
+    expect(ran).toEqual(['opus[1m]'])
     await ui.unmount()
   })
 })
