@@ -28,6 +28,8 @@ import {
   trendText,
   turnsLeft,
   tween,
+  fullIn,
+  withReadings,
 } from '../hooks/register'
 
 const usage = (tokens: number, percent: number): SessionUsage => ({
@@ -1647,5 +1649,75 @@ describe('turns to compact', () => {
     const off = await band($, 200)
     expect(drawn(await off.find({ key: 'line2' }))).toMatch(/window full in ~7 turns/)
     await off.unmount()
+  })
+})
+
+describe('rate-limit pace', () => {
+  const M = 60_000
+  const RESET = new Date(3 * 3_600_000).toISOString()
+  type Paces = Parameters<typeof withReadings>[0]
+  /** Readings of the five-hour window, each [time, percent], as the mod keeps them. */
+  const keep = (readings: [number, number][], resetsAt = RESET) =>
+    readings.reduce<Paces>((p, [at, percentUsed]) => withReadings(p, [{ kind: 'five_hour', percentUsed, resetsAt }], at), {})
+
+  test('the recent pace says when a window runs out', async () => {
+    const p = keep([
+      [0, 40],
+      [6 * M, 46],
+      [12 * M, 52],
+    ]).five_hour
+    // 12 points in 12 minutes: the 48 left last 48 minutes
+    expect(fullIn(p, 12 * M)).toBe(48 * M)
+    expect(fullIn(p, 13 * M)).toBe(47 * M)
+  })
+
+  test('no pace too early, too slow, gone idle, or when the window resets first', async () => {
+    expect(fullIn(keep([[0, 40], [5 * M, 46]]).five_hour, 5 * M)).toBeUndefined()
+    expect(fullIn(keep([[0, 40], [12 * M, 40.5]]).five_hour, 12 * M)).toBeUndefined()
+    const p = keep([[0, 40], [12 * M, 52]]).five_hour
+    expect(fullIn(p, 22 * M)).toBe(38 * M)
+    expect(fullIn(p, 23 * M)).toBeUndefined()
+    expect(fullIn(keep([[0, 40], [12 * M, 52]], new Date(30 * M).toISOString()).five_hour, 12 * M)).toBeUndefined()
+    expect(fullIn(keep([[0, 99], [12 * M, 100]]).five_hour, 12 * M)).toBeUndefined()
+  })
+
+  test('a new window or a drop starts over; readings keep half an hour, about one a minute', async () => {
+    expect(keep([[0, 40], [6 * M, 46], [12 * M, 10]]).five_hour?.samples).toEqual([{ at: 12 * M, percent: 10 }])
+    const next = withReadings(keep([[0, 40], [6 * M, 46]]), [{ kind: 'five_hour', percentUsed: 47, resetsAt: 'later' }], 7 * M)
+    expect(next.five_hour).toEqual({ resetsAt: 'later', samples: [{ at: 7 * M, percent: 47 }] })
+    expect(keep([[0, 10], [20 * M, 20], [40 * M, 30]]).five_hour?.samples).toEqual([
+      { at: 20 * M, percent: 20 },
+      { at: 40 * M, percent: 30 },
+    ])
+    expect(keep([[0, 10], [10_000, 11], [20_000, 12], [90_000, 13]]).five_hour?.samples).toEqual([
+      { at: 0, percent: 10 },
+      { at: 20_000, percent: 12 },
+      { at: 90_000, percent: 13 },
+    ])
+    // a window that is no longer reported is dropped
+    expect(withReadings(keep([[0, 10]]), [], M)).toEqual({})
+  })
+
+  test('row 3 warns, in red, when a window runs out before it resets', { timeoutMs: 30_000 }, async ($, on) => {
+    let percentUsed = 40
+    const reading = (): SessionUsage => ({
+      ...usage(84_000, 42),
+      rateLimits: [{ kind: 'five_hour', percentUsed, resetsAt: new Date(600_000 + 3 * 3_600_000).toISOString() }],
+    })
+    on('session.usage', () => ({ value: reading() }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    for (const p of [46, 52]) {
+      await clock.advance(6 * M)
+      percentUsed = p
+      const u = reading()
+      await $.session.measure({ context: u.context, rateLimits: u.rateLimits, cost: u.cost, changed: ['rateLimits'] })
+    }
+    const ui = await band($, 200)
+    expect(drawn(await ui.find({ key: 'line3segs' }))).toMatch(/5h \d+% full in ~48m, resets 2h 48m/)
+    expect((await ui.find({ type: 'Text', text: 'full in ~48m' }))?.props.color).toBe('error')
+    await ui.unmount()
   })
 })

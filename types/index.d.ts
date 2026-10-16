@@ -2,6 +2,9 @@ export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
 export type Category = { name: string; tokens: number }
 
+/** A rate-limit window's recent readings, oldest first, for its pace: kept while the window (its `resetsAt`) stays the same. */
+export type LimitPace = { resetsAt?: string; samples: { at: number; percent: number }[] }
+
 export type Snapshot = {
   /** Input tokens of the last response (absent before the first one, and right after a compaction). */
   tokens?: number
@@ -78,6 +81,8 @@ declare module 'claude-code' {
       readError: string | null
       /** The engine's Text takes `mono` (2.1.299 on); false while the version is unknown. */
       hasMono: boolean
+      /** Each rate-limit window's readings of the last half hour, by kind, for its pace. */
+      pace: Record<string, LimitPace>
     }
   }
 }

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionUsage, TurnStepInput } from 'claude-code'
 
-import type { Effort, Snapshot } from '../types'
+import type { Effort, Limit, LimitPace, Snapshot } from '../types'
 
 const snap = atom({ plugin: 'context-meter', key: 'snap' } as const, null)
 const effort = atom({ plugin: 'context-meter', key: 'effort' } as const, { isUltra: false } as Effort)
@@ -15,6 +15,7 @@ const awakeTick = atom({ plugin: 'context-meter', key: 'awakeTick' } as const, 0
 const showDetails = atom({ plugin: 'context-meter', key: 'showDetails' } as const, false)
 const readError = atom({ plugin: 'context-meter', key: 'readError' } as const, null as string | null)
 const hasMono = atom({ plugin: 'context-meter', key: 'hasMono' } as const, false)
+const pace = atom({ plugin: 'context-meter', key: 'pace' } as const, {} as Record<string, LimitPace>)
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -628,6 +629,54 @@ export function turnsLeft(trendTokens: readonly number[], room: number): number 
 /** "~6 turns", "~1 turn". */
 const turnsText = (n: number) => `~${n} turn${n === 1 ? '' : 's'}`
 
+/** A window's pace is read over its readings of the last half hour, about one a minute... */
+const PACE_KEEP_MS = 30 * 60_000
+const PACE_EVERY_MS = 60_000
+/** ...once they span 10 minutes, and while the newest is at most 10 minutes old (you are at it). */
+const PACE_SPAN_MS = 10 * 60_000
+const PACE_IDLE_MS = 10 * 60_000
+
+/**
+ * Each rate-limit window's readings with this one added at `now`. A new window (another
+ * `resetsAt`) or a drop starts them over; they keep the last half hour, about one a minute
+ * (a newer reading within the minute takes the last one's place). Windows no longer
+ * reported are dropped.
+ */
+export function withReadings(
+  paces: Readonly<Record<string, LimitPace>>,
+  limits: readonly Limit[],
+  now: number,
+): Record<string, LimitPace> {
+  const next: Record<string, LimitPace> = {}
+  for (const l of limits) {
+    const old = paces[l.kind]
+    const last = old?.samples[old.samples.length - 1]
+    const isSame = old !== undefined && last !== undefined && old.resetsAt === l.resetsAt && l.percentUsed >= last.percent
+    const kept = isSame ? old.samples.filter(r => r.at >= now - PACE_KEEP_MS) : []
+    const beforeLast = kept[kept.length - 2]
+    if (beforeLast !== undefined && now - beforeLast.at < PACE_EVERY_MS) kept.pop()
+    next[l.kind] = { resetsAt: l.resetsAt, samples: [...kept, { at: now, percent: l.percentUsed }] }
+  }
+  return next
+}
+
+/**
+ * How long until a window is used up at its recent pace, in ms: from the rise over its kept
+ * readings. Nothing before they span PACE_SPAN_MS or rose a point, once they are older than
+ * PACE_IDLE_MS, or when the window resets first.
+ */
+export function fullIn(p: LimitPace | undefined, now: number): number | undefined {
+  const first = p?.samples[0]
+  const last = p?.samples[p.samples.length - 1]
+  if (p === undefined || first === undefined || last === undefined || last.percent >= 100) return undefined
+  const span = last.at - first.at
+  const rise = last.percent - first.percent
+  if (span < PACE_SPAN_MS || rise < 1 || now - last.at > PACE_IDLE_MS) return undefined
+  const fullAt = last.at + ((100 - last.percent) / rise) * span
+  const resetsAt = p.resetsAt === undefined ? NaN : Date.parse(p.resetsAt)
+  return fullAt > now && !(fullAt >= resetsAt) ? fullAt - now : undefined
+}
+
 /** "42m", "3h 5m", and from a day on "1d 2h". */
 export function duration(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000))
@@ -1150,6 +1199,7 @@ async function refresh($: EngineInterface, opts: RefreshOptions = {}): Promise<b
       return next
     })
     if (isChanged) await startCountUp($)
+    await update($, pace, p => withReadings(p, usage.rateLimits, now))
     const tokens = usage.context.tokens
     if ((isFresh || opts.isTurnEnd) && tokens !== undefined) {
       await update($, trend, t => (t[t.length - 1] === tokens ? t : [...t, tokens].slice(-TREND_KEEP)))
@@ -1464,7 +1514,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
-    const [s, trendTokens, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking, whyNoReading, isMono] =
+    const [s, trendTokens, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking, whyNoReading, isMono, paces] =
       await Promise.all([
         read($, snap),
         read($, trend),
@@ -1478,6 +1528,7 @@ export const register: Register = (on, options) => {
         read($, isModelPickerOpen),
         read($, readError),
         read($, hasMono),
+        read($, pace),
       ])
     // A surface draws the band though none was seen to attach: its work starts, outside this
     // render (a render never writes state).
@@ -1864,14 +1915,19 @@ export const register: Register = (on, options) => {
     if (s.usd !== undefined) line3.push({ segs: [hlSeg('usd', `$${shown('usd', s.usd).toFixed(2)}`)], rank: 4 })
     s.limits.forEach((l, i) => {
       const key = `limit:${l.kind}`
+      // At the recent pace it runs out before it resets: "5h 72% full in ~48m", in red.
+      const full = fullIn(paces[l.kind], now)
+      const warning: Seg[] =
+        full === undefined ? [] : [{ text: ' ' }, { text: `full in ${full < 60_000 ? '<1m' : `~${duration(full)}`}`, color: 'error' }]
       // short: "5h 23%", without when the window resets
       const short: Seg[] = [
         { text: `${LIMIT_NAMES[l.kind] ?? l.kind} ` },
         hlSeg(key, `${Math.round(shown(key, l.percentUsed))}%`),
+        ...warning,
       ]
       const resets = resetText(l.resetsAt, now)
       line3.push({
-        segs: resets === undefined ? short : [...short, { text: ` ${resets}` }],
+        segs: resets === undefined ? short : [...short, { text: `${full === undefined ? ' ' : ', '}${resets}` }],
         rank: i === 0 ? 3 : 2,
         short: resets === undefined ? undefined : short,
       })
