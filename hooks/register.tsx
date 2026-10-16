@@ -107,6 +107,8 @@ const KEY_FUMING_COLOR = 'warning'
 const MOOD_BODY: Record<Mood, string> = { calm: 'claude', annoyed: '#e5603f', fuming: '#e5383b' }
 /** His eyes, left and right, when he is not calm: flat (annoyed), squeezed shut (fuming). */
 const MOOD_EYES: Record<Exclude<Mood, 'calm'>, readonly [string, string]> = { annoyed: ['▂', '▂'], fuming: ['>', '<'] }
+/** Inside the glasses, flat eyes are a line through the middle of each lens, where the open `●` sits. */
+const GLASSES_EYES: Record<Exclude<Mood, 'calm'>, readonly [string, string]> = { annoyed: ['━', '━'], fuming: ['>', '<'] }
 
 /**
  * Clawd's rows as colored pieces, 13 cells wide: his 9 plus 2 on each side,
@@ -167,7 +169,7 @@ export function clawdRows(o: {
   if (o.outfit === 'cap-bottles-glasses') {
     // Round white rims around each eye, a bridge between them; the eyes shut inside the rims.
     const rim = (text: string): ClawdPiece => ({ text, color: GLASSES_COLOR, bg: C, bold: true })
-    const [l, r] = o.isShut ? ['─', '─'] : mood === 'calm' ? ['●', '●'] : MOOD_EYES[mood]
+    const [l, r] = o.isShut ? ['─', '─'] : mood === 'calm' ? ['●', '●'] : GLASSES_EYES[mood]
     rows.push([left, inner(' '), rim('('), ink(l), rim(')─('), ink(r), rim(')'), inner(' '), right])
   } else if (o.isShut || mood !== 'calm') {
     const [l, r] = o.isShut || mood === 'calm' ? [CLAWD.shutEye, CLAWD.shutEye] : MOOD_EYES[mood]

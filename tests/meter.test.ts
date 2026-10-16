@@ -958,7 +958,8 @@ describe('moods', () => {
     }
     expect(lines({ outfit: 'none', isShut: false, mood: 'annoyed' })).toContain('   ▐▂███▂▌   ')
     expect(lines({ outfit: 'none', isShut: false, mood: 'fuming' })).toContain('   ▐>███<▌   ')
-    expect(lines({ outfit: 'cap-bottles-glasses', isShut: false, mood: 'annoyed' })).toContain(' ╰─(▂)─(▂)─╯ ')
+    // in the glasses, flat eyes sit where the open ones do: a line through the middle of each lens
+    expect(lines({ outfit: 'cap-bottles-glasses', isShut: false, mood: 'annoyed' })).toContain(' ╰─(━)─(━)─╯ ')
     expect(lines({ outfit: 'cap-bottles-glasses', isShut: false, mood: 'fuming' })).toContain(' ╰─(>)─(<)─╯ ')
     // his eyes are drawn on his face, as shut ones are: dark on a dark theme, light on a light one
     expect(pieces({ outfit: 'none', isShut: false, mood: 'fuming' }).find(p => p.text === '>')).toMatchObject({

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Annoyed Clawd's eyes behind the glasses (xhigh) sit where his open eyes do: a line through the middle of each lens (`━`), no longer low at the bottom of the lens.
+
 ## 0.4.2 — 2026-10-16
 
 - More settings in `/config`: hide Clawd (`showClawd`, the stats take his room), `reduceMotion` (no count-up, a Clawd who keeps still), the `one-line` layout everywhere, hide the cost, the rate limits or the compact button, where the bar turns amber and red (`warnAt`, `alertAt`, with Clawd's moods), a fixed `cacheLifetime` (`5m` or `1h`), and the `models` the model picker lists (`opus[1m]`, `best`, model ids).

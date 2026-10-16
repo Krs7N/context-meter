@@ -177,7 +177,7 @@ Clawd as the Claude Code welcome banner draws him, in the frame's left corner, s
   | Bar | Mood | Clawd |
   | --- | --- | --- |
   | orange | calm | as above |
-  | `warning` | annoyed | ember body (`#e5603f`) and flat eyes (`▂`, a `-_-` look); he still blinks and types as usual |
+  | `warning` | annoyed | ember body (`#e5603f`) and flat eyes (`▂`, a `-_-` look; behind the glasses a line through the middle of each lens, `━`, where the open eye sits); he still blinks and types as usual |
   | `error` | fuming | red body (`#e5383b`) and eyes squeezed shut (`>` `<`), so he does not blink; awake, he shakes a cell left and right each frame (his hat, cap and bottles with him, the keyboard stays), and the key he hits flashes amber (`warning`) |
 
   The body colours are raw, so he looks the same in every theme (`MOOD_BODY`, `MOOD_EYES`). His outfit, width and height never change with the mood. In Claude Code Desktop the picture's alt text names it (`Clawd, fuming, typing`).
