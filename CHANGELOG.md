@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Clawd feels the context fill up, changing at the same moment as the bar. At the bar's first colour change (`warning`) he turns ember and his eyes go flat (`-_-`). When the bar turns red he turns red too and squeezes his eyes shut (`>_<`), so he stops blinking. Awake, he shakes a cell left and right each frame, and the key he hits flashes amber. This works in every outfit and on both surfaces. Asleep, he keeps the colour but rests.
+
 ## 0.3.4 — 2026-10-15
 
 - A changed number is highlighted by the way it moved: green where it went up, red where it went down, instead of blue either way. The same goes for the percent's `▲`/`▼`, the bar's newly filled part (green), the `window … → …` note, and a turn's growth by its sign (`+` green, `−` red).

@@ -927,6 +927,172 @@ test('Clawd blinks about every four seconds', async ($, on) => {
   await ui.unmount()
 })
 
+/** Clawd's rows as the terminal band draws them, top to bottom. */
+const clawdLines = async (ui: Awaited<ReturnType<typeof band>>) => {
+  const lines: string[] = []
+  for (let r = 0; ; r++) {
+    const row = await ui.find({ key: `clawd${r}` })
+    if (row === undefined) return lines
+    lines.push(drawn(row))
+  }
+}
+
+describe('moods', () => {
+  const OUTFITS = ['none', 'cap', 'cap-bottles', 'cap-bottles-glasses', 'top-hat'] as const
+  const lines = (o: Parameters<typeof clawdRows>[0]) => clawdRows(o).map(r => r.map(p => p.text).join(''))
+  const pieces = (o: Parameters<typeof clawdRows>[0]) => clawdRows(o).flat()
+
+  test('annoyed he turns ember and flattens his eyes; fuming, red with his eyes squeezed shut', async () => {
+    for (const outfit of OUTFITS) {
+      const annoyed = pieces({ outfit, isShut: false, mood: 'annoyed' })
+      const fuming = pieces({ outfit, isShut: false, mood: 'fuming' })
+      // none of his orange is left
+      for (const p of [...annoyed, ...fuming]) expect([p.color, p.bg], outfit).not.toContain('claude')
+      expect(annoyed.some(p => p.color === '#e5603f'), outfit).toBe(true)
+      expect(fuming.some(p => p.color === '#e5383b'), outfit).toBe(true)
+    }
+    expect(lines({ outfit: 'none', isShut: false, mood: 'annoyed' })).toContain('   ▐▂███▂▌   ')
+    expect(lines({ outfit: 'none', isShut: false, mood: 'fuming' })).toContain('   ▐>███<▌   ')
+    expect(lines({ outfit: 'cap-bottles-glasses', isShut: false, mood: 'annoyed' })).toContain(' ╰─(▂)─(▂)─╯ ')
+    expect(lines({ outfit: 'cap-bottles-glasses', isShut: false, mood: 'fuming' })).toContain(' ╰─(>)─(<)─╯ ')
+    // his eyes are drawn on his face, as shut ones are: dark on a dark theme, light on a light one
+    expect(pieces({ outfit: 'none', isShut: false, mood: 'fuming' }).find(p => p.text === '>')).toMatchObject({
+      color: 'inverseText',
+      bg: '#e5383b',
+    })
+    // shut eyes (a blink, or asleep) win over the mood
+    expect(lines({ outfit: 'none', isShut: true, mood: 'fuming' })).toContain('   ▐▁███▁▌   ')
+    expect(lines({ outfit: 'cap-bottles-glasses', isShut: true, mood: 'annoyed' })).toContain(' ╰─(─)─(─)─╯ ')
+  })
+
+  test('fuming, he shakes a cell either way above the keyboard', async () => {
+    expect(lines({ outfit: 'none', isShut: false, mood: 'fuming', shake: -1 })).toEqual([
+      '  ▐>███<▌    ',
+      ' ▝▜█████▛▘   ',
+      '  ▀ ▀▀▀▀▀ ▀  ',
+      ' ▀ ▀ ▀ ▀ ▀ ▀ ',
+    ])
+    expect(lines({ outfit: 'none', isShut: false, mood: 'fuming', shake: 1 })).toEqual([
+      '    ▐>███<▌  ',
+      '   ▝▜█████▛▘ ',
+      '  ▀ ▀▀▀▀▀ ▀  ',
+      ' ▀ ▀ ▀ ▀ ▀ ▀ ',
+    ])
+    for (const outfit of OUTFITS) {
+      const still = lines({ outfit, isShut: false, mood: 'fuming' })
+      for (const shake of [-1, 1]) {
+        const moved = lines({ outfit, isShut: false, mood: 'fuming', shake })
+        // the keyboard stays put; his hat, cap and bottles move with him; 13 cells always
+        expect(moved.slice(-2), `${outfit} ${shake}`).toEqual(still.slice(-2))
+        moved.slice(0, -2).forEach((row, i) => {
+          const from = still[i] ?? ''
+          expect(row, `${outfit} ${shake}`).toBe(shake < 0 ? `${from.slice(1)} ` : ` ${from.slice(0, -1)}`)
+        })
+        for (const row of moved) expect([...row].length).toBe(13)
+      }
+    }
+  })
+
+  test('his keys flash amber while he fumes', async () => {
+    for (let t = 0; t < 4; t++) {
+      const lit = pieces({ outfit: 'none', isShut: false, mood: 'fuming', typing: t }).filter(p => p.bold && p.bg === 'subtle')
+      expect(lit.map(p => p.color)).toEqual(['warning'])
+    }
+  })
+
+  test('the desktop picture draws every mood with shapes, in the mood’s colour', async () => {
+    for (const mood of ['annoyed', 'fuming'] as const) {
+      for (const outfit of OUTFITS) {
+        for (const isShut of [false, true]) {
+          const svg = clawdSvg(clawdRows({ outfit, isShut, mood, typing: 1, shake: -1 })).source
+          expect(svg, `${mood} ${outfit}`).not.toContain('<text')
+          expect(svg).toContain(mood === 'annoyed' ? 'fill="#e5603f"' : 'fill="#e5383b"')
+          expect(svg).not.toContain('class="f-claude"')
+        }
+      }
+    }
+  })
+
+  test('he takes on the bar’s colour as it changes, frame by frame', async ($, on) => {
+    let current = usage(84_000, 42)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 120)
+    // his body for each colour of the bar's fill: orange, ember while it warns, red once it is red
+    const BODY: Record<string, string> = { claude: 'claude', warning: '#e5603f', error: '#e5383b' }
+    const colours = async () => {
+      // the bar's fill is the run after the label
+      const texts = await ui.findAll({ type: 'Text' })
+      const fill = texts[texts.findIndex(t => t.text === 'Context ') + 1]
+      return {
+        bar: String(fill?.props.color),
+        body: (await ui.find({ type: 'Text', text: '▝▜█████▛▘' }))?.props.color,
+      }
+    }
+    const seen = new Set<string>()
+    for (const next of [usage(132_000, 66), usage(170_000, 85)]) {
+      current = next
+      await turnEnds($, current)
+      // the bar counts up to its new fill over 6 s, and Clawd changes when it does
+      for (let i = 0; i < 10; i++) {
+        const { bar, body } = await colours()
+        expect(body, `bar ${bar}`).toBe(BODY[bar])
+        seen.add(bar)
+        await clock.advance(700)
+      }
+    }
+    expect([...seen].sort()).toEqual(['claude', 'error', 'warning'])
+    await ui.unmount()
+    const desk = await $.ui.mount({ plugin: 'context-meter', surface: 'desktop', component: 'AbovePrompt', props: props(120) })
+    const picture = await desk.find({ type: 'Svg' })
+    expect(picture?.props.alt).toBe('Clawd, fuming')
+    expect(String(picture?.props.source)).toContain('fill="#e5383b"')
+    await desk.unmount()
+  })
+
+  test('fuming, he shakes every frame and never blinks', async ($, on) => {
+    on('session.usage', () => ({ value: usage(170_000, 85) }))
+    on('session.start', () => ({ cwd: '.' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 120)
+    const seen = new Set<string>()
+    // a whole blink period (6 frames), and one more
+    for (let i = 0; i < 7; i++) {
+      const [eyes, body, ...keyboard] = await clawdLines(ui)
+      expect(eyes).toMatch(/▐>███<▌/)
+      expect(keyboard).toEqual(['  ▀ ▀▀▀▀▀ ▀  ', ' ▀ ▀ ▀ ▀ ▀ ▀ '])
+      seen.add(`${eyes}|${body}`)
+      await clock.advance(700)
+    }
+    expect([...seen].sort()).toEqual(['    ▐>███<▌  |   ▝▜█████▛▘ ', '  ▐>███<▌    | ▝▜█████▛▘   '].sort())
+    await ui.unmount()
+  })
+
+  test('asleep he stays red, but rests: eyes shut, no shaking', { options: { sleepAfterMinutes: 1 }, timeoutMs: 20_000 }, async ($, on) => {
+    on('session.usage', () => ({ value: usage(170_000, 85) }))
+    on('session.start', () => ({ cwd: '.' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 120)
+    await clock.advance(60_000 + 700 * 4)
+    const frames = new Set<string>()
+    for (let i = 0; i < 2; i++) {
+      const [zzz, ...rest] = await clawdLines(ui)
+      expect(zzz).toMatch(/[zZ]/)
+      frames.add(rest.join('\n'))
+      await clock.advance(700)
+    }
+    expect([...frames]).toEqual(['   ▐▁███▁▌   \n  ▝▜█████▛▘  \n    ▘▘ ▝▝    '])
+    expect((await ui.find({ type: 'Text', text: '▝▜█████▛▘' }))?.props.color).toBe('#e5383b')
+    await ui.unmount()
+  })
+})
+
 describe('model switch', () => {
   test('the meter redraws for the new window at once', async ($, on) => {
     let current = usageIn(1_000_000, 180_000)

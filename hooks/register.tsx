@@ -77,6 +77,14 @@ export function outfitFor(e: Effort): Outfit {
   }
 }
 
+/** How Clawd takes the context filling up: calm while the bar is orange, annoyed once it warns, fuming once it is red. */
+export type Mood = 'calm' | 'annoyed' | 'fuming'
+
+/** Clawd's mood from the bar's colour (`fillColor`), so the two always change together. */
+function moodFor(fill: string): Mood {
+  return fill === 'error' ? 'fuming' : fill === 'warning' ? 'annoyed' : 'calm'
+}
+
 export type ClawdPiece = { text: string; color?: string; bg?: string; bold?: boolean }
 
 const PAD = '  '
@@ -89,14 +97,29 @@ const GLASSES_COLOR = 'text' // white rims on a dark theme, so they stand out on
 const KEYBOARD_COLOR = 'subtle' // the case, showing between the keycaps
 const KEY_COLOR = 'inactive'
 const KEY_LIT_COLOR = 'suggestion'
+/** Fuming, the key he hits flashes amber: a red one would vanish under his red arm. */
+const KEY_FUMING_COLOR = 'warning'
+/** His body by mood: Claude orange, ember, red. Raw colours, so he looks the same in every theme. */
+const MOOD_BODY: Record<Mood, string> = { calm: 'claude', annoyed: '#e5603f', fuming: '#e5383b' }
+/** His eyes, left and right, when he is not calm: flat (annoyed), squeezed shut (fuming). */
+const MOOD_EYES: Record<Exclude<Mood, 'calm'>, readonly [string, string]> = { annoyed: ['▂', '▂'], fuming: ['>', '<'] }
 
 /**
  * Clawd's rows as colored pieces, 13 cells wide: his 9 plus 2 on each side,
  * where the high-effort bottles hang. The width never changes with the outfit,
- * so the stats beside him stay put.
+ * so the stats beside him stay put. `shake` moves him a cell left (-1) or
+ * right (1), keyboard aside.
  */
-export function clawdRows(o: { outfit: Outfit; isShut: boolean; typing?: number; zzz?: string }): ClawdPiece[][] {
-  const C = 'claude'
+export function clawdRows(o: {
+  outfit: Outfit
+  isShut: boolean
+  typing?: number
+  zzz?: string
+  mood?: Mood
+  shake?: number
+}): ClawdPiece[][] {
+  const mood = o.mood ?? 'calm'
+  const C = MOOD_BODY[mood]
   const side = (text: string, color?: string): ClawdPiece => ({ text, color })
   const hasBottles = o.outfit === 'cap-bottles' || o.outfit === 'cap-bottles-glasses'
   const hasCap = o.outfit === 'cap' || hasBottles
@@ -132,19 +155,25 @@ export function clawdRows(o: { outfit: Outfit; isShut: boolean; typing?: number;
   const left = hasBottles ? side(' ╰', STRAW_COLOR) : side(PAD)
   const right = hasBottles ? side('╯ ', STRAW_COLOR) : side(PAD)
   const inner = (text: string): ClawdPiece => (hasBottles ? side('─', STRAW_COLOR) : side(text))
+  // Eyes drawn on his face (shut, flat or squeezed) take the colour of what ▛ and ▜ leave
+  // empty: dark on a dark theme, light on a light one. Squeezed ones are bold.
+  const isSqueezed = mood === 'fuming' && !o.isShut
+  const ink = (text: string): ClawdPiece =>
+    isSqueezed ? { text, color: 'inverseText', bg: C, bold: true } : { text, color: 'inverseText', bg: C }
   if (o.outfit === 'cap-bottles-glasses') {
     // Round white rims around each eye, a bridge between them; the eyes shut inside the rims.
     const rim = (text: string): ClawdPiece => ({ text, color: GLASSES_COLOR, bg: C, bold: true })
-    const pupil: ClawdPiece = { text: o.isShut ? '─' : '●', color: 'inverseText', bg: C }
-    rows.push([left, inner(' '), rim('('), pupil, rim(')─('), pupil, rim(')'), inner(' '), right])
-  } else if (o.isShut) {
+    const [l, r] = o.isShut ? ['─', '─'] : mood === 'calm' ? ['●', '●'] : MOOD_EYES[mood]
+    rows.push([left, inner(' '), rim('('), ink(l), rim(')─('), ink(r), rim(')'), inner(' '), right])
+  } else if (o.isShut || mood !== 'calm') {
+    const [l, r] = o.isShut || mood === 'calm' ? [CLAWD.shutEye, CLAWD.shutEye] : MOOD_EYES[mood]
     rows.push([
       left,
       inner(' '),
       { text: '▐', color: C },
-      { text: CLAWD.shutEye, color: 'inverseText', bg: C },
+      ink(l),
       { text: '███', color: C },
-      { text: CLAWD.shutEye, color: 'inverseText', bg: C },
+      ink(r),
       { text: '▌', color: C },
       inner(' '),
       right,
@@ -157,16 +186,17 @@ export function clawdRows(o: { outfit: Outfit; isShut: boolean; typing?: number;
   const body = (t === undefined ? undefined : CLAWD.typing[t % CLAWD.typing.length]) ?? CLAWD.body
   rows.push([side(PAD), { text: body, color: C }, side(PAD)])
   // Asleep he has left the keyboard: his legs show again where it stood.
-  if (o.zzz !== undefined) {
-    rows.push([side(PAD), { text: CLAWD.legs, color: C }, side(PAD)])
-    return rows
-  }
+  if (o.zzz !== undefined) rows.push([side(PAD), { text: CLAWD.legs, color: C }, side(PAD)])
+  // Shaking, all of him moves; the keyboard stays put.
+  const by = o.shake ?? 0
+  const placed = by === 0 ? rows : rows.map(row => shifted(row, by))
+  if (o.zzz !== undefined) return placed
   const lit = t === undefined ? undefined : litKey(t)
   CLAWD.keyboard.forEach((line, r) => {
     const cells = [...line]
     const cap = (text: string, isLit = false): ClawdPiece => ({
       text,
-      color: isLit ? KEY_LIT_COLOR : KEY_COLOR,
+      color: isLit ? (mood === 'fuming' ? KEY_FUMING_COLOR : KEY_LIT_COLOR) : KEY_COLOR,
       bg: KEYBOARD_COLOR,
       bold: isLit,
     })
@@ -178,9 +208,27 @@ export function clawdRows(o: { outfit: Outfit; isShut: boolean; typing?: number;
             cap(cells.slice(lit[2]).join('')),
           ].filter(p => p.text !== '')
         : [cap(line)]
-    rows.push([side(' '), ...pieces, side(' ')])
+    placed.push([side(' '), ...pieces, side(' ')])
   })
-  return rows
+  return placed
+}
+
+/**
+ * A row of Clawd moved a cell left (`by` < 0) or right (`by` > 0): a blank cell leaves one
+ * edge and joins the other, so the row keeps its width. A row with no blank on that edge stays.
+ */
+function shifted(row: readonly ClawdPiece[], by: number): ClawdPiece[] {
+  const first = row[0]
+  const last = row[row.length - 1]
+  if (by < 0 && first?.bg === undefined && first?.text.startsWith(' ')) {
+    const rest = first.text.slice(1)
+    return [...(rest ? [{ ...first, text: rest }] : []), ...row.slice(1), { text: ' ' }]
+  }
+  if (by > 0 && last?.bg === undefined && last?.text.endsWith(' ')) {
+    const rest = last.text.slice(0, -1)
+    return [{ text: ' ' }, ...row.slice(0, -1), ...(rest ? [{ ...last, text: rest }] : [])]
+  }
+  return [...row]
 }
 
 /**
@@ -276,6 +324,12 @@ function glyphSvg(ch: string, x: number, y: number, paint: SvgPaint, isBold: boo
       return ''
     case '▁':
       return rect(x, y + h - h / 8, w, h / 8)
+    case '▂':
+      return rect(x, y + h - h / 4, w, h / 4)
+    case '>':
+      return stroke(`M${x + 2} ${y + 5} L${x + w - 2} ${y + h / 2 + 1} L${x + 2} ${y + h - 3}`, isBold ? 2 : 1.5)
+    case '<':
+      return stroke(`M${x + w - 2} ${y + 5} L${x + 2} ${y + h / 2 + 1} L${x + w - 2} ${y + h - 3}`, isBold ? 2 : 1.5)
     case '─':
       return rect(x, y + h / 2 - (isBold ? 1 : 0.5), w, isBold ? 2 : 1)
     case '━':
@@ -1458,10 +1512,21 @@ export const register: Register = (on, options) => {
 
     const idleTicks = tick - awake
     const isAsleep = !isWorking && idleTicks >= sleepAfterTicks
-    const isBlinking = !isAsleep && tick % BLINK_EVERY === BLINK_EVERY - 1
+    // Clawd takes the bar's colour. Fuming, his eyes are squeezed shut already, so he does not
+    // blink, and while awake he shakes, a cell to one side each frame.
+    const mood = moodFor(fill)
+    const isBlinking = !isAsleep && mood !== 'fuming' && tick % BLINK_EVERY === BLINK_EVERY - 1
     const typing = isWorking ? tick : undefined
+    const shake = mood === 'fuming' && !isAsleep ? (tick % 2 === 0 ? -1 : 1) : 0
     const zzz = isAsleep ? CLAWD.zzz[Math.floor((idleTicks - sleepAfterTicks) / 2) % CLAWD.zzz.length] : undefined
-    const clawd = clawdRows({ outfit: outfitFor(eff), isShut: isAsleep || isBlinking, typing, zzz: isAsleep ? zzz : undefined })
+    const clawd = clawdRows({
+      outfit: outfitFor(eff),
+      isShut: isAsleep || isBlinking,
+      typing,
+      zzz: isAsleep ? zzz : undefined,
+      mood,
+      shake,
+    })
     const hasCategories = isDetailed && s.categories.length > 0
 
     // The picker opens around the badge: lower levels above it, higher ones below, the
@@ -1805,7 +1870,7 @@ export const register: Register = (on, options) => {
           {Svg ? (
             <Svg
               {...clawdSvg(clawd)}
-              alt={`Clawd${isAsleep ? ', asleep' : isWorking ? ', typing' : ''}`}
+              alt={`Clawd${mood === 'calm' ? '' : `, ${mood}`}${isAsleep ? ', asleep' : isWorking ? ', typing' : ''}`}
             />
           ) : (
             clawd.map((row, r) => (

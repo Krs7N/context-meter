@@ -4,7 +4,8 @@ See your context window fill up as you work, without typing `/context`. A live b
 above the prompt shows an animated fill bar, the token count, headroom before
 auto-compaction, the usage trend, the session's length and cost, and the rate limits with
 when each resets. It also has one-click model and effort pickers and Clawd, who types while
-Claude works, dresses up for the effort level and naps when you're idle.
+Claude works, dresses up for the effort level, gets cross as the context fills up and naps
+when you're idle.
 
 ![context-meter above the Claude Code prompt, with the details row and the effort picker open](docs/context-meter.png)
 
@@ -60,7 +61,7 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 | 3 | session duration, session cost, rate-limit windows (`5h`, `7d`, `spend`), each with a countdown to its reset: `session 1h 3m · $4.20 · 5h 23% resets 2h 14m · 7d 41% resets 3d 4h` | `startedAt` and the clock, `cost.usd`, `rateLimits` (`percentUsed`, `resetsAt`) |
 | 4 (optional) | the 5 largest used categories, as `/context` splits them | `breakdown.categories` (kind `used`) — toggled by the **details** button |
 
-- Bar color: Claude orange (`claude` theme key), then `warning` and `error` as the fill nears the auto-compact point (from three quarters of the way, and from 95 %). With no auto-compact point known: `warning` from 60 %, `error` from 80 % of the window (`fillColor`).
+- Bar color: Claude orange (`claude` theme key), then `warning` and `error` as the fill nears the auto-compact point (from three quarters of the way, and from 95 %). With no auto-compact point known: `warning` from 60 %, `error` from 80 % of the window (`fillColor`). Clawd changes with it (see [The mascot](#the-mascot-clawd)).
 - The bar fills in eighth-block steps (`▏▎▍▌▋▊▉█`), so it moves smoothly. It is up to 40 cells wide.
 - A `┊` mark on the empty part shows where auto-compaction runs.
 - The meter moves with each model request of a running turn, not only when the turn ends.
@@ -135,7 +136,16 @@ Clawd as the Claude Code welcome banner draws him, in the frame's left corner, s
   | max, ultracode | a tall purple magician's hat with a gold band, and nothing else |
 
   He is 13 cells wide in every outfit, so the stats beside him never move.
-- Asleep: after 5 minutes without activity (the `sleepAfterMinutes` setting; `0` keeps him awake), he leaves the keyboard (his legs show again in its place), his eyes close (inside the glasses too) and "zZzZ" grows out from the top-left of his head, in an extra row above him and any hat. He keeps his outfit while asleep. A prompt, a model request or a new reading wakes him (`markActive`).
+- He feels the context fill up. His mood follows the bar's colour (`fillColor`, read by `moodFor`), so the two always change together, count-up included:
+
+  | Bar | Mood | Clawd |
+  | --- | --- | --- |
+  | orange | calm | as above |
+  | `warning` | annoyed | ember body (`#e5603f`) and flat eyes (`▂`, a `-_-` look); he still blinks and types as usual |
+  | `error` | fuming | red body (`#e5383b`) and eyes squeezed shut (`>` `<`), so he does not blink; awake, he shakes a cell left and right each frame (his hat, cap and bottles with him, the keyboard stays), and the key he hits flashes amber (`warning`) |
+
+  The body colours are raw, so he looks the same in every theme (`MOOD_BODY`, `MOOD_EYES`). His outfit, width and height never change with the mood. In Claude Code Desktop the picture's alt text names it (`Clawd, fuming, typing`).
+- Asleep: after 5 minutes without activity (the `sleepAfterMinutes` setting; `0` keeps him awake), he leaves the keyboard (his legs show again in its place), his eyes close (inside the glasses too) and "zZzZ" grows out from the top-left of his head, in an extra row above him and any hat. He keeps his outfit and his mood's colour while asleep, but rests: no squeezed eyes, no shaking. A prompt, a model request or a new reading wakes him (`markActive`).
 - Frames live in the `CLAWD` constant in `hooks/register.tsx`; the timing in
   `TICK_MS` (tick length) and `BLINK_EVERY` (ticks between blinks).
 
