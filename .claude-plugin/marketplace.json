@@ -6,7 +6,7 @@
       "name": "context-meter",
       "source": "./",
       "description": "See your context window fill up as you work: animated fill bar, auto-compact headroom and turns left, trend, cost, cache and rate-limit warnings, a compact button, one-click model and effort pickers and Clawd, who types, dresses up for the effort, gets cross as the context fills and naps.",
-      "version": "0.4.2"
+      "version": "0.4.3"
     }
   ]
 }

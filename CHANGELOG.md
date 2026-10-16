@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 — 2026-10-16
 
 - Annoyed Clawd's eyes behind the glasses (xhigh) sit where his open eyes do: a line through the middle of each lens (`━`), no longer low at the bottom of the lens.
+- In Claude Code Desktop, fuming Clawd's squeezed eyes (`>` `<`) are centred in the lens too; they sat a pixel low. The terminal already drew them there.
 
 ## 0.4.2 — 2026-10-16
 

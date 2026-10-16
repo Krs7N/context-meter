@@ -1,6 +1,6 @@
 {
   "name": "context-meter",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "See your context window fill up as you work, no /context needed. A live band above the prompt shows an animated fill bar, token count, auto-compact headroom and the turns it lasts, usage trend, session cost, prompt-cache hits and a cold-cache warning, and rate limits with when the recent pace runs one out. It also has one-click model and effort pickers, a compact button once the context runs high, and Clawd, who types while Claude works, dresses up for the effort level, gets cross as the context fills and dozes off when you're idle.",
   "author": { "name": "Krs7N", "url": "https://github.com/Krs7N" },
   "homepage": "https://github.com/Krs7N/context-meter",
