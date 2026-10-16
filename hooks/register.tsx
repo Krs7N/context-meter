@@ -1063,6 +1063,9 @@ export function changedKeys(old: Snapshot | null | undefined, next: Snapshot): s
   return keys
 }
 
+/** A fall of the fill by more than this share, with no compaction seen, is a shrink. */
+const SHRINK = 0.2
+
 /**
  * A reading as the meter keeps it. With no `previous` it is fresh: nothing is
  * highlighted and "this turn" counts from its tokens. A reading without a breakdown,
@@ -1090,6 +1093,13 @@ export function toSnapshot(
   let turnBase = previous ? previous.turnBase : tokens
   let lastDelta = previous?.lastDelta
   let compaction = previous?.compaction
+  // The fill fell by more than SHRINK with no compaction recorded (an organisation-managed
+  // install runs no session.compact hook of the mod's; a rewind drops it too): a shrink, not
+  // a turn's growth. The next turn counts from what is left.
+  if (previous?.tokens !== undefined && tokens !== undefined && !isNewWindow && tokens < previous.tokens * (1 - SHRINK)) {
+    compaction = { before: previous.tokens, after: tokens, isShrink: true }
+    turnBase = undefined
+  }
   let isTurnMeasured = false
   if (isTurnEnd && tokens !== undefined) {
     if (turnBase !== undefined) {
@@ -1220,7 +1230,7 @@ async function refresh($: EngineInterface, opts: RefreshOptions = {}): Promise<b
         previous !== null && next.changedTick === tick && next.changed.length > 0 && next.changed !== previous.changed
       return next
     })
-    if (isChanged) await startCountUp($)
+    if (isChanged) await startCountUp($, opts.stepTokens === undefined ? 1 : LIVE_STRIDE)
     await update($, pace, p => withReadings(p, usage.rateLimits, now))
     const tokens = usage.context.tokens
     if ((isFresh || opts.isTurnEnd) && tokens !== undefined) {
@@ -1242,17 +1252,20 @@ async function refresh($: EngineInterface, opts: RefreshOptions = {}): Promise<b
 }
 
 /*
- * One engine timer drives every animation. Work a hook starts on its own dies
- * with that hook's dispatch (its budget counts every sleep), so the loop is a
- * `$.clock.every` interval, which runs until cancelled or the module reloads.
- * It ticks every TWEEN_MS: the count-up advances on each tick while it runs,
- * the mascot's frame on every SUBTICKS-th.
+ * Two engine timers drive the animation. Work a hook starts on its own dies with that hook's
+ * dispatch (its budget counts every sleep), so each loop is a `$.clock.every` interval, which
+ * runs until cancelled or the module reloads. The ticker ticks every TICK_MS: the mascot's
+ * frame (blink, typing, sleep, the highlight's fade), and the polls every second tick. The
+ * counter ticks every TWEEN_MS only while a changed number counts up, and stops once it lands.
  */
-const SUBTICKS = Math.round(TICK_MS / TWEEN_MS)
-
 let ticker: { cancel: () => void } | undefined
-let subtick = 0
+let counter: { cancel: () => void } | undefined
+let ticks = 0
 let countStep = TWEEN_STEPS
+/** Steps a count-up moves per counter tick: 1 at a turn end (6 s), LIVE_STRIDE for a reading mid-turn. */
+let countStride = 1
+/** A reading mid-turn counts up in a second, so a long agentic turn does not keep the counter running. */
+const LIVE_STRIDE = 6
 
 /** The surfaces the band is drawn on: AbovePrompt is raised on these alone. */
 const BAND_SURFACES: ReadonlySet<string> = new Set(['terminal', 'desktop'])
@@ -1282,7 +1295,7 @@ async function wake($: EngineInterface): Promise<void> {
 function startTicker($: EngineInterface): void {
   if (ticker || !isDrawn) return
   try {
-    ticker = $.clock.every(TWEEN_MS, () => {
+    ticker = $.clock.every(TICK_MS, () => {
       void onTick($)
     })
   } catch {
@@ -1293,18 +1306,43 @@ function startTicker($: EngineInterface): void {
 function stopTicker(): void {
   ticker?.cancel()
   ticker = undefined
+  stopCounter()
+}
+
+function startCounter($: EngineInterface): void {
+  if (counter || !isDrawn) return
+  try {
+    counter = $.clock.every(TWEEN_MS, () => {
+      void onCount($)
+    })
+  } catch {
+    counter = undefined
+  }
+}
+
+function stopCounter(): void {
+  counter?.cancel()
+  counter = undefined
+}
+
+/** One step of the count-up; the counter stops once it lands. */
+async function onCount($: EngineInterface): Promise<void> {
+  if (countStep >= TWEEN_STEPS) return stopCounter()
+  countStep = Math.min(TWEEN_STEPS, countStep + countStride)
+  const step = countStep
+  if (step >= TWEEN_STEPS) stopCounter()
+  try {
+    await update($, tweenStep, () => step)
+  } catch {
+    // drawing state is best effort
+  }
 }
 
 async function onTick($: EngineInterface): Promise<void> {
-  subtick++
+  const n = ++ticks
   try {
-    if (countStep < TWEEN_STEPS) {
-      countStep++
-      const step = countStep
-      await update($, tweenStep, () => step)
-    }
-    if (subtick % SUBTICKS === 0) await update($, frame, t => t + 1)
-    if (subtick % (SUBTICKS * 2) === 0) {
+    await update($, frame, t => t + 1)
+    if (n % 2 === 0) {
       // no reading since a start-over failed: try again
       const retry = (await read($, snap)) === null ? refresh($, { isFresh: true }) : undefined
       await Promise.all([pollSavedEffort($), refreshModel($), retry])
@@ -1330,18 +1368,21 @@ async function startOver($: EngineInterface): Promise<void> {
   }
 }
 
-/** "compacted 182.0k → 31.0k", or what the engine recorded of it. */
+/** "compacted 182.0k → 31.0k" (or "shrank …" when no compaction was seen), or what the engine recorded of it. */
 function compactionText(c: NonNullable<Snapshot['compaction']>): string {
-  if (c.before !== undefined && c.after !== undefined) return `compacted ${fmtTokens(c.before)} → ${fmtTokens(c.after)}`
-  if (c.after !== undefined) return `compacted to ${fmtTokens(c.after)}`
-  return c.before !== undefined ? `compacted from ${fmtTokens(c.before)}` : 'compacted'
+  const verb = c.isShrink ? 'shrank' : 'compacted'
+  if (c.before !== undefined && c.after !== undefined) return `${verb} ${fmtTokens(c.before)} → ${fmtTokens(c.after)}`
+  if (c.after !== undefined) return `${verb} to ${fmtTokens(c.after)}`
+  return c.before !== undefined ? `${verb} from ${fmtTokens(c.before)}` : verb
 }
 
-/** A change was recorded: count up from step 0; a newer change restarts it. */
-async function startCountUp($: EngineInterface): Promise<void> {
+/** A change was recorded: count up from step 0, `stride` steps a counter tick; a newer change restarts it. */
+async function startCountUp($: EngineInterface, stride = 1): Promise<void> {
   countStep = 0
+  countStride = stride
   await update($, tweenStep, () => 0)
   startTicker($)
+  startCounter($)
 }
 
 /**
@@ -2018,7 +2059,7 @@ export const register: Register = (on, options) => {
       const c = s.compaction
       const text = compactionText(c)
       const move = c.before !== undefined && c.after !== undefined && c.before !== c.after ? (c.after > c.before ? 'up' : 'down') : undefined
-      const prefix = 'compacted '
+      const prefix = c.isShrink ? 'shrank ' : 'compacted '
       line2.push({
         segs:
           move === undefined

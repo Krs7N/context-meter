@@ -223,13 +223,13 @@ test('band shows fill, tokens, cost and limits; a new reading redraws it', async
   expect(newRun?.props.color).toBe('success')
   expect((await ui.find({ type: 'Text', text: '42→91%' }))?.props.color).toBe('success')
 
-  // a drop is red, its arrow too
+  // a drop is red, its arrow too (one this big is a shrink, not the turn's growth)
   current = usage(60_000, 30)
   await turnEnds($, current)
   await clock.advance(6500)
   expect((await ui.find({ type: 'Text', text: /30%▼/ }))?.props.color).toBe('error')
   expect((await ui.find({ type: 'Text', text: '60.0k' }))?.props.color).toBe('error')
-  expect((await ui.find({ type: 'Text', text: '−122.0k' }))?.props.color).toBe('error')
+  expect((await ui.find({ type: 'Text', text: '182.0k → 60.0k' }))?.props.color).toBe('error')
   expect((await ui.find({ type: 'Text', text: '42→30%' }))?.props.color).toBe('error')
   await ui.unmount()
 })
@@ -241,7 +241,7 @@ describe('which way a change went', () => {
   test('a rise is up and a fall is down, key by key', async () => {
     const up = after({ ...usage(100_000, 50), cost: { usd: 2 }, rateLimits: [{ kind: 'five_hour', percentUsed: 30 }] })
     for (const key of ['tokens', 'percent', 'usd', 'limit:five_hour', 'delta']) expect(moveOf(up, key), key).toBe('up')
-    const down = after({ ...usage(50_000, 25), cost: { usd: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 10 }] })
+    const down = after({ ...usage(70_000, 35), cost: { usd: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 10 }] })
     for (const key of ['tokens', 'percent', 'usd', 'limit:five_hour', 'delta']) expect(moveOf(down, key), key).toBe('down')
   })
 
@@ -1845,6 +1845,88 @@ describe('cold cache', () => {
     const working = await band($, 200, true)
     expect(drawn(await working.find({ key: 'line2' }))).not.toMatch(/cache cold/)
     await working.unmount()
+    await ui.unmount()
+  })
+})
+
+describe('timers', () => {
+  test('idle, one timer runs at the frame rate; the fast one only while a number counts', { timeoutMs: 30_000 }, async ($, on) => {
+    const periods: number[] = []
+    // one probe per period the mod could ask for, above the mock clock's own hook (a second
+    // unmatched clock.every hook is refused)
+    for (const ms of [100, 700]) {
+      on('clock.every', { ms }, ($, e, next) => {
+        periods.push(e.ms)
+        return next(e)
+      })
+    }
+    const clock = mock.clock(on, { now: 600_000 })
+    let current = usage(50_000, 25)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    await $.session.start(START)
+    await clock.advance(7_000)
+    periods.length = 0
+    await clock.advance(60_000)
+    // a frame each 0.7 s (the polls ride every second one), nothing faster
+    expect(periods.filter(ms => ms < 700)).toEqual([])
+    expect(periods.length).toBeGreaterThanOrEqual(84)
+    expect(periods.length).toBeLessThanOrEqual(87)
+    // a turn end counts up for 6 s on the fast timer, which then stops
+    periods.length = 0
+    current = usage(80_000, 40)
+    await turnEnds($, current)
+    await clock.advance(10_000)
+    const fast = periods.filter(ms => ms === 100).length
+    expect(fast).toBeGreaterThanOrEqual(58)
+    expect(fast).toBeLessThanOrEqual(62)
+  })
+
+  test('a reading in the middle of a turn counts up in a second', async ($, on) => {
+    let context = 50_000
+    on('session.usage', () => ({ value: usage(50_000, 25) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answer(() => context))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await clock.advance(7_000)
+    const ui = await band($, 140, true)
+    context = 90_000
+    await request($, 'high')
+    await clock.advance(1_100)
+    expect(await ui.find({ type: 'Text', text: '90.0k' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('a fill that falls without a compaction seen', () => {
+  test('is a shrink, not a turn; the next turn counts from there', async ($, on) => {
+    let current = usage(182_000, 91)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    // an organisation-managed install runs no session.compact hook of the mod's
+    current = usage(31_000, 16)
+    await turnEnds($, current)
+    await clock.advance(7_000)
+    const ui = await band($, 200)
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/shrank 182\.0k → 31\.0k/)
+    expect(drawn(await ui.find({ key: 'line2' }))).not.toMatch(/last turn/)
+    current = usage(40_000, 20)
+    await turnEnds($, current)
+    await clock.advance(7_000)
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/last turn \+9\.0k/)
+    expect(drawn(await ui.find({ key: 'line2' }))).not.toMatch(/shrank/)
+    // a small drop is still the turn's own
+    current = usage(36_000, 18)
+    await turnEnds($, current)
+    await clock.advance(7_000)
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/last turn −4\.0k/)
     await ui.unmount()
   })
 })

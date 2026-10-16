@@ -45,8 +45,11 @@ export type Snapshot = {
   turnBase?: number
   /** The window before the last window change (a model switch), for the `window 1.00M → 200.0k` chip. */
   windowFrom?: number
-  /** The last main-conversation compaction, kept until a turn end measures a real `lastDelta`. */
-  compaction?: { before?: number; after?: number }
+  /**
+   * The last main-conversation compaction, kept until a turn end measures a real `lastDelta`.
+   * `isShrink`: no compaction was seen, the fill just fell (`shrank 182.0k → 31.0k`).
+   */
+  compaction?: { before?: number; after?: number; isShrink?: boolean }
   /** When this reading was taken, in $.clock.now() milliseconds. */
   at: number
   /** Which numbers changed at the last change: tokens, headroom, delta, percent, window, usd, limit:<kind>. */
