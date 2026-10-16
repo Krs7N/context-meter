@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-10-16
+
+- Lighter on the machine, Claude Code Desktop most of all. The band's timer ticks every 0.7 s instead of every 0.1 s, and a faster one runs only while a number counts up: about 86 timer dispatches a minute when idle instead of 600. A reading in the middle of a turn counts up in 1 s instead of 6 s, so a long agentic turn no longer redraws the band ten times a second throughout.
+- A fill that falls by more than a fifth with no compaction seen shows `shrank 182.0k → 31.0k` instead of `last turn −151.0k`, and the next turn counts from there. This fixes organisation-managed installs, where Claude Code runs no `session.compact` hook of the mod's, and covers rewinds.
+- README: an update needs `/reload-plugins` (or a restart) after `/plugin update`; colour-blind readers get blue for rises from Claude Code's colorblind-friendly themes in `/theme`.
+
 ## 0.4.0 — 2026-10-16
 
 - Clawd feels the context fill up, changing at the same moment as the bar. At the bar's first colour change (`warning`) he turns ember and his eyes go flat (`-_-`). When the bar turns red he turns red too and squeezes his eyes shut (`>_<`), so he stops blinking. Awake, he shakes a cell left and right each frame, and the key he hits flashes amber. This works in every outfit and on both surfaces. Asleep, he keeps the colour but rests.

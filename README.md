@@ -23,7 +23,7 @@ Requires Claude Code 2.1.295 or later. Claude Code Desktop runs its own bundled 
 2. Press Enter to keep the **user** scope, so the mod loads in every session.
 3. Claude Code prints `Installed context-meter. Plugin is now active.` The band appears above the prompt right away.
 
-**Update** to a newer version with `/plugin update context-meter`. **Remove** the mod with `/plugin uninstall context-meter`.
+**Update** to a newer version with `/plugin update context-meter`, then `/reload-plugins` (or restart Claude Code): a session that is already open keeps drawing the old version until then. **Remove** the mod with `/plugin uninstall context-meter`.
 
 ### Settings
 
@@ -59,7 +59,7 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 | Row | Content | Source |
 | --- | --- | --- |
 | 1 | `Context` + fill bar + percent + `tokens / window`; model badge and effort badge on the right | `$.session.usage().context` (`tokens`, `window`, `percent`); model and effort: see below |
-| 2 | in this order, each only when it applies: `! 150.0k over the 200.0k window: next send compacts` (or `: /compact before sending` with auto-compaction off), in red; `cache cold: next send re-writes 162.0k` in amber (see [Cold cache](#cold-cache)); `window 1.00M → 200.0k` for about 10 s after a model switch; `┊ auto-compact at 167.0k (83.0k left, ~6 turns)` (the same `┊` as on the bar), or with auto-compaction off `window full in ~6 turns`; the turn: `this turn +12.0k` while Claude works, `compacted 182.0k → 31.0k` after a compaction, else `last turn +3.2k`; fill trend `trend ▁▂▃▅▇ 12→42%` | `context.breakdown`; each main-thread request's usage; the turn ends; `trend` and `cache` state |
+| 2 | in this order, each only when it applies: `! 150.0k over the 200.0k window: next send compacts` (or `: /compact before sending` with auto-compaction off), in red; `cache cold: next send re-writes 162.0k` in amber (see [Cold cache](#cold-cache)); `window 1.00M → 200.0k` for about 10 s after a model switch; `┊ auto-compact at 167.0k (83.0k left, ~6 turns)` (the same `┊` as on the bar), or with auto-compaction off `window full in ~6 turns`; the turn: `this turn +12.0k` while Claude works, `compacted 182.0k → 31.0k` after a compaction (`shrank 182.0k → 31.0k` when the fill fell with no compaction seen), else `last turn +3.2k`; fill trend `trend ▁▂▃▅▇ 12→42%` | `context.breakdown`; each main-thread request's usage; the turn ends; `trend` and `cache` state |
 | 3 | session duration, session cost, how much of the last request the cache served, rate-limit windows (`5h`, `7d`, `spend`), each with a countdown to its reset, then the **compact** button once the bar warns: `session 1h 3m · $4.20 · cache 97% · 5h 72% full in ~48m, resets 2h 14m · 7d 41% resets 3d 4h · compact` | `startedAt` and the clock, `cost.usd`, the main request's usage, `rateLimits` (`percentUsed`, `resetsAt`) and the `pace` state |
 | 4 (optional) | the 5 largest used categories, as `/context` splits them | `breakdown.categories` (kind `used`) — toggled by the **details** button |
 
@@ -69,8 +69,9 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - The meter moves with each model request of a running turn, not only when the turn ends.
 - When a reading raises the fill, the newly added part is drawn bold green (`success`) for about 10 s. The percent then shows a green `▲`, or a red `▼` (`error`) when it drops.
 - **Change highlight:** every number that changed since the last reading is drawn bold for about 10 s (`HIGHLIGHT_TICKS` × 0.7 s): green where it went up, red where it went down (`moveOf`). This covers tokens, tokens left before compaction, percent, cost, each rate-limit percent and the `window … → …` note. A turn's growth (`this turn`, `last turn`) goes by its sign: `+` green, `−` red. Unchanged numbers stay dim. A new window (a model switch) is no growth: no `▲`, no count-up, just the `window …` note.
+- **Colour-blind readers:** pick **Dark mode (colorblind-friendly)** or **Light mode (colorblind-friendly)** in `/theme`. Claude Code draws `success` in blue there and keeps `error` red, and the band's up and down colours are those two theme keys, so every rise turns blue. Clawd's moods change his face as well as his colour.
 - **Arrows** take the same colours, not bold: the trend's ends (`12→42%` green when the fill rose over the trend, red when it fell) and the compaction note (`compacted 182.0k → 31.0k`, red).
-- **Count-up:** a changed number does not jump to its new value. It counts there from the old one over 6 s with an ease-out (`TWEEN_STEPS` × `TWEEN_MS`), and the bar grows with it. A newer reading restarts the count.
+- **Count-up:** a changed number does not jump to its new value. It counts there from the old one over 6 s with an ease-out (`TWEEN_STEPS` × `TWEEN_MS`), or over 1 s for a reading in the middle of a turn (`LIVE_STRIDE`), and the bar grows with it. A newer reading restarts the count.
 - **Trend:** the tokens at the last 8 turn ends, scaled to the values shown, then first→last as percents of the window shown now, so a switch to a smaller window draws no spike.
 - **Over the window:** the engine caps the percent at 100, so a context bigger than the window (after a switch to a smaller model) shows as red tokens and the warning at the start of row 2.
 - Below 72 columns, when the badges leave too little room beside Clawd for the bar, the percent and the tokens, or when the full band (an open picker included) is taller than the room above the prompt (`maxRows`, a short fullscreen terminal), only row 1 and the two badges are drawn, without frame and mascot. Where even an open picker column is taller than that room, its choices are drawn in a row instead of the meter until it closes.
@@ -81,6 +82,7 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - The session clock and the reset countdowns run between readings. A window whose reset time is unknown or already past shows its percent alone.
 - Before the first reply of a session (or right after `/clear`) the token count shows "waiting for the first reply". Right after a compaction it shows what the compaction left, `~31.0k / 200.0k tokens`, until the next reply.
 - `/clear` and `/resume` start the meter over: no growth or trend is measured against the conversation before.
+- **A fill that falls without a compaction seen:** when a reading is more than a fifth below the one before (`SHRINK`) and no compaction was recorded, row 2 shows `shrank 182.0k → 31.0k` instead of a negative turn, and the next turn counts from there. This covers organisation-managed installs, where Claude Code does not run a plugin's `session.compact` hooks, and rewinds.
 - In Claude Code Desktop Clawd is drawn as one picture (`clawdSvg`), so he looks as he does in the terminal; the badges and picker options are Desktop's own buttons. The band's text is set in the monospaced face where Desktop's engine supports it (2.1.299 or later, read with `$.session.version()`). An older engine refuses the whole band over that setting, so there, or while the version is unknown, the text uses Desktop's page font.
 - Until the first reading, the band is one line: `Context waiting for the first reply`, or, where reading the usage fails, `reading failed on desktop: <why>` in `warning`. The reason also goes to the debug log (`claude --debug`).
 
@@ -175,7 +177,7 @@ Clawd as the Claude Code welcome banner draws him, in the frame's left corner, s
 
 ## The timer
 
-All animation (mascot frames, count-up) runs on one `$.clock.every(100 ms)` interval (`startTicker`). Work that a hook starts with `sleep` loops dies when that hook's dispatch ends, because each hook has a time budget and sleeps count against it. An engine interval runs until it is cancelled or the module reloads. `session.start` starts the interval and lands any count-up a reload interrupted. `session.measure`, `prompt.submit` and `/effort` restart it if it is missing, because a `/clear` fires no new `session.start`. `session.end` stops it, except on `/clear` and `/resume`, which keep it and start the meter over 0.3 s later. It runs only while a terminal or Claude Code Desktop draws the band.
+All animation runs on two `$.clock.every` intervals. The ticker (`startTicker`) ticks every 0.7 s (`TICK_MS`): Clawd's frames, the highlight's fade and, every second tick, the polls. The counter (`startCounter`) ticks every 100 ms (`TWEEN_MS`) only while a changed number counts up, and stops once it lands, so an idle band makes about 86 dispatches a minute. Work that a hook starts with `sleep` loops dies when that hook's dispatch ends, because each hook has a time budget and sleeps count against it. An engine interval runs until it is cancelled or the module reloads. `session.start` starts the ticker and lands any count-up a reload interrupted. `session.measure`, `prompt.submit` and `/effort` restart it if it is missing, because a `/clear` fires no new `session.start`. `session.end` stops it, except on `/clear` and `/resume`, which keep it and start the meter over 0.3 s later. It runs only while a terminal or Claude Code Desktop draws the band.
 
 Every `/effort` writes a line to the debug log (`claude --debug`): `context-meter: /effort <args> → "<output>" (applied: …)`. If `/effort` was given a level and the mod could not read its output, the line also goes to the transcript.
 
@@ -231,4 +233,4 @@ claude plugin test context-meter
 
 Type-check: once Claude Code has loaded the mod (`claude --plugin-dir ./context-meter`), `.claude-plugin/types/` holds the engine's types (gitignored) and `npx -y -p typescript@5.6.3 tsc -p context-meter` works.
 
-Releasing: bump `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, add a `CHANGELOG.md` entry, commit to `main` and push, then publish the GitHub release (`gh release create vX.Y.Z --target main`, which creates the tag). Installed copies pick it up with `/plugin update context-meter`.
+Releasing: bump `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, add a `CHANGELOG.md` entry, commit to `main` and push, then publish the GitHub release (`gh release create vX.Y.Z --target main`, which creates the tag). Installed copies pick it up with `/plugin update context-meter`, then `/reload-plugins`.
