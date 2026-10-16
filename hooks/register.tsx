@@ -332,10 +332,11 @@ function glyphSvg(ch: string, x: number, y: number, paint: SvgPaint, isBold: boo
       return rect(x, y + h - h / 8, w, h / 8)
     case '▂':
       return rect(x, y + h - h / 4, w, h / 4)
+    // squeezed eyes, tip and ends centred on the cell's middle, where an open pupil (●) sits
     case '>':
-      return stroke(`M${x + 2} ${y + 5} L${x + w - 2} ${y + h / 2 + 1} L${x + 2} ${y + h - 3}`, isBold ? 2 : 1.5)
+      return stroke(`M${x + 2} ${y + 4} L${x + w - 2} ${y + h / 2} L${x + 2} ${y + h - 4}`, isBold ? 2 : 1.5)
     case '<':
-      return stroke(`M${x + w - 2} ${y + 5} L${x + 2} ${y + h / 2 + 1} L${x + w - 2} ${y + h - 3}`, isBold ? 2 : 1.5)
+      return stroke(`M${x + w - 2} ${y + 4} L${x + 2} ${y + h / 2} L${x + w - 2} ${y + h - 4}`, isBold ? 2 : 1.5)
     case '─':
       return rect(x, y + h / 2 - (isBold ? 1 : 0.5), w, isBold ? 2 : 1)
     case '━':

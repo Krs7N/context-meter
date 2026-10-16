@@ -971,6 +971,19 @@ describe('moods', () => {
     expect(lines({ outfit: 'cap-bottles-glasses', isShut: true, mood: 'annoyed' })).toContain(' ╰─(─)─(─)─╯ ')
   })
 
+  test('on the desktop his squeezed eyes are centred in the lens, where the open ones are', async () => {
+    const calm = clawdSvg(clawdRows({ outfit: 'cap-bottles-glasses', isShut: false })).source
+    const fuming = clawdSvg(clawdRows({ outfit: 'cap-bottles-glasses', isShut: false, mood: 'fuming' })).source
+    const cy = Number(/<circle cx="[\d.]+" cy="([\d.]+)"/.exec(calm)?.[1])
+    // each chevron: its two ends and its tip, centred on the open pupil's middle
+    const chevrons = [...fuming.matchAll(/<path d="M[\d.]+ ([\d.]+) L[\d.]+ ([\d.]+) L[\d.]+ ([\d.]+)"/g)]
+    expect(chevrons).toHaveLength(2)
+    for (const [, top, tip, bottom] of chevrons) {
+      expect(Number(tip)).toBe(cy)
+      expect((Number(top) + Number(bottom)) / 2).toBe(cy)
+    }
+  })
+
   test('fuming, he shakes a cell either way above the keyboard', async () => {
     expect(lines({ outfit: 'none', isShut: false, mood: 'fuming', shake: -1 })).toEqual([
       '  ▐>███<▌    ',
