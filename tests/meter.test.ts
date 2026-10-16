@@ -30,6 +30,7 @@ import {
   tween,
   fullIn,
   withReadings,
+  ttlFrom,
 } from '../hooks/register'
 
 const usage = (tokens: number, percent: number): SessionUsage => ({
@@ -1718,6 +1719,96 @@ describe('rate-limit pace', () => {
     const ui = await band($, 200)
     expect(drawn(await ui.find({ key: 'line3segs' }))).toMatch(/5h \d+% full in ~48m, resets 2h 48m/)
     expect((await ui.find({ type: 'Text', text: 'full in ~48m' }))?.props.color).toBe('error')
+    await ui.unmount()
+  })
+})
+
+describe('cold cache', () => {
+  const M = 60_000
+  const used = (read: number, written: number, input = 2_000) => ({
+    input_tokens: input,
+    cache_read_input_tokens: read,
+    cache_creation_input_tokens: written,
+    output_tokens: 900,
+  })
+
+  test('a request sent a while after the last reply tells how long the cache lives', async () => {
+    // still read from the cache after 10 minutes: it lives an hour
+    expect(ttlFrom(10 * M, used(50_000, 8_000))).toBe('1h')
+    // written again after 10 minutes: it lives 5
+    expect(ttlFrom(10 * M, used(0, 58_000))).toBe('5m')
+    // too soon or too late to tell, too small, or neither
+    expect(ttlFrom(3 * M, used(0, 58_000))).toBeUndefined()
+    expect(ttlFrom(70 * M, used(50_000, 8_000))).toBeUndefined()
+    expect(ttlFrom(10 * M, used(300, 100, 100))).toBeUndefined()
+    expect(ttlFrom(10 * M, used(20_000, 20_000, 20_000))).toBeUndefined()
+  })
+
+  /** The engine answering a main request with these cache counts. */
+  const answering = (counts: () => ReturnType<typeof used>) =>
+    async function* (_$: unknown, e: TurnStepInput) {
+      return {
+        turnId: e.turnId,
+        index: e.index,
+        answer: '',
+        toolUses: [],
+        stopReason: 'end_turn' as const,
+        usage: { ...counts(), model: 'claude-opus-5-5' },
+      }
+    }
+
+  test('idle past the cache’s lifetime, row 2 says the next send re-writes it', { timeoutMs: 30_000 }, async ($, on) => {
+    let read = 50_000
+    const stored: Record<string, unknown> = {}
+    on('store.get', ($, e) => ({ value: stored[e.key] }) as never)
+    on('store.set', ($, e) => {
+      stored[e.key] = e.value
+      return { value: undefined } as never
+    })
+    on('session.usage', () => ({ value: usage(60_000, 30) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answering(() => used(read, 58_000 - read)))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'high')
+    const ui = await band($, 200)
+    // how much of the last request the cache served
+    expect(drawn(await ui.find({ key: 'line3segs' }))).toMatch(/ · cache 83% · /)
+    // its lifetime is not known yet: no warning before an hour
+    await clock.advance(6 * M)
+    expect(drawn(await ui.find({ key: 'line2' }))).not.toMatch(/cache cold/)
+    // the next request wrote it all again: it lives 5 minutes, and that is kept
+    read = 0
+    await request($, 'high')
+    expect(stored.cacheTtl).toBe('5m')
+    expect(drawn(await ui.find({ key: 'line3segs' }))).toMatch(/cache 0%/)
+    await clock.advance(4 * M)
+    expect(drawn(await ui.find({ key: 'line2' }))).not.toMatch(/cache cold/)
+    await clock.advance(M + 1_000)
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/^cache cold: next send re-writes 60\.0k/)
+    expect((await ui.find({ type: 'Text', text: /cache cold/ }))?.props.color).toBe('warning')
+    // a request warms it again
+    read = 50_000
+    await request($, 'high')
+    expect(drawn(await ui.find({ key: 'line2' }))).not.toMatch(/cache cold/)
+    await ui.unmount()
+  })
+
+  test('a lifetime learned in an earlier session holds from the start', { timeoutMs: 30_000 }, async ($, on) => {
+    on('store.get', ($, e) => ({ value: e.key === 'cacheTtl' ? '5m' : undefined }) as never)
+    on('session.usage', () => ({ value: usage(60_000, 30) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('turn.step', answering(() => used(50_000, 8_000)))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'high')
+    await clock.advance(5 * M + 1_000)
+    const ui = await band($, 200)
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/^cache cold/)
+    // while Claude works, the cache is in use: no warning
+    const working = await band($, 200, true)
+    expect(drawn(await working.find({ key: 'line2' }))).not.toMatch(/cache cold/)
+    await working.unmount()
     await ui.unmount()
   })
 })

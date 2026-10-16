@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionUsage, TurnStepInput } from 'claude-code'
+import type { EngineInterface, Register, SessionUsage, TurnStepInput, TurnUsage } from 'claude-code'
 
-import type { Effort, Limit, LimitPace, Snapshot } from '../types'
+import type { CacheReading, CacheTtl, Effort, Limit, LimitPace, Snapshot } from '../types'
 
 const snap = atom({ plugin: 'context-meter', key: 'snap' } as const, null)
 const effort = atom({ plugin: 'context-meter', key: 'effort' } as const, { isUltra: false } as Effort)
@@ -16,6 +16,8 @@ const showDetails = atom({ plugin: 'context-meter', key: 'showDetails' } as cons
 const readError = atom({ plugin: 'context-meter', key: 'readError' } as const, null as string | null)
 const hasMono = atom({ plugin: 'context-meter', key: 'hasMono' } as const, false)
 const pace = atom({ plugin: 'context-meter', key: 'pace' } as const, {} as Record<string, LimitPace>)
+const cache = atom({ plugin: 'context-meter', key: 'cache' } as const, {} as CacheReading)
+const cacheTtl = atom({ plugin: 'context-meter', key: 'cacheTtl' } as const, null as CacheTtl | null)
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -628,6 +630,25 @@ export function turnsLeft(trendTokens: readonly number[], room: number): number 
 
 /** "~6 turns", "~1 turn". */
 const turnsText = (n: number) => `~${n} turn${n === 1 ? '' : 's'}`
+
+/** The prompt cache lives 5 minutes or an hour after the last reply; until a request shows which, an hour. */
+const TTL_MS: Record<CacheTtl, number> = { '5m': 5 * 60_000, '1h': 60 * 60_000 }
+
+/**
+ * What a main request sent `gapMs` after the last reply, on the same model and effort, tells
+ * of the cache's lifetime: still read from the cache past 5 minutes, an hour; written again
+ * before an hour, 5 minutes. Nothing too soon (with a 30 s margin) or too near the hour to
+ * tell, for a small request, or when neither side has most of it.
+ */
+export function ttlFrom(
+  gapMs: number,
+  u: { input_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number },
+): CacheTtl | undefined {
+  const total = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+  if (total < 1_000 || gapMs <= TTL_MS['5m'] + 30_000 || gapMs >= TTL_MS['1h'] - 5 * 60_000) return undefined
+  if (u.cache_read_input_tokens >= total / 2) return '1h'
+  return u.cache_creation_input_tokens >= total / 2 ? '5m' : undefined
+}
 
 /** A window's pace is read over its readings of the last half hour, about one a minute... */
 const PACE_KEEP_MS = 30 * 60_000
@@ -1253,7 +1274,7 @@ async function isBandSurfaceAttached($: EngineInterface): Promise<boolean> {
 /** The band's work starts: the timer, a full reading, the model and the effort. */
 async function wake($: EngineInterface): Promise<void> {
   startTicker($)
-  await Promise.all([refresh($), refreshEffort($), markActive($), refreshModel($)])
+  await Promise.all([refresh($), refreshEffort($), markActive($), refreshModel($), loadCacheTtl($)])
   await pollSavedEffort($)
 }
 
@@ -1301,6 +1322,7 @@ async function startOver($: EngineInterface): Promise<void> {
   try {
     startTicker($)
     await update($, trend, () => [])
+    await update($, cache, () => ({}))
     if (!(await refresh($, { isFresh: true }))) await update($, snap, () => null)
   } catch {
     // drawing state is best effort; the ticker retries while there is no reading
@@ -1319,6 +1341,49 @@ async function startCountUp($: EngineInterface): Promise<void> {
   countStep = 0
   await update($, tweenStep, () => 0)
   startTicker($)
+}
+
+/**
+ * A main request was answered: note when, and how much of it the cache served. Sent long
+ * enough after the last reply, on the same model and effort, it also shows how long the cache
+ * lives (`ttlFrom`), kept in the store for later sessions.
+ */
+async function noteCache(
+  $: EngineInterface,
+  u: TurnUsage,
+  effortSent: TurnStepInput['effort'],
+  sentAt: number | undefined,
+): Promise<void> {
+  try {
+    const now = await $.clock.now()
+    const total = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+    let learned: CacheTtl | undefined
+    await update($, cache, old => {
+      const isSameCache = old.repliedAt !== undefined && old.model === u.model && old.effort === effortSent
+      learned = isSameCache && sentAt !== undefined ? ttlFrom(sentAt - (old.repliedAt ?? sentAt), u) : undefined
+      return { repliedAt: now, hit: total > 0 ? u.cache_read_input_tokens / total : undefined, model: u.model, effort: effortSent }
+    })
+    if (learned === undefined) return
+    const ttl = learned
+    let isNew = false
+    await update($, cacheTtl, t => {
+      isNew = t !== ttl
+      return ttl
+    })
+    if (isNew) await $.store.set('cacheTtl', ttl)
+  } catch {
+    // drawing state is best effort
+  }
+}
+
+/** The cache's lifetime an earlier session learned, if any. */
+async function loadCacheTtl($: EngineInterface): Promise<void> {
+  try {
+    const v = await $.store.get('cacheTtl')
+    if (v === '5m' || v === '1h') await update($, cacheTtl, () => v)
+  } catch {
+    // unknown until a request shows it
+  }
 }
 
 /** Activity wakes Clawd: the idle count restarts from the current tick. */
@@ -1423,6 +1488,8 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     const isMain = e.agentId === undefined
     const noted = Promise.all([markActive($), isMain ? noteEffort($, e.effort) : undefined])
+    // when it was sent, for the cache's lifetime: asked for, not waited on
+    const sentAt = isMain ? $.clock.now().catch(() => undefined) : undefined
     const result = yield* next(e)
     await noted
     const u = result.usage
@@ -1431,6 +1498,7 @@ export const register: Register = (on, options) => {
         breakdown: false,
         stepTokens: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
       })
+      await noteCache($, u, e.effort, await sentAt)
     }
     return result
   })
@@ -1504,6 +1572,8 @@ export const register: Register = (on, options) => {
                 turnBase: undefined,
               },
         )
+        // the compacted conversation is a new cache: the next request tells nothing of its lifetime
+        await update($, cache, c => ({ ...c, repliedAt: undefined }))
       } catch {
         // drawing state is best effort
       }
@@ -1514,8 +1584,23 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
-    const [s, trendTokens, tick, isDetailed, eff, awake, isPicking, step, modelName, isModelPicking, whyNoReading, isMono, paces] =
-      await Promise.all([
+    const [
+      s,
+      trendTokens,
+      tick,
+      isDetailed,
+      eff,
+      awake,
+      isPicking,
+      step,
+      modelName,
+      isModelPicking,
+      whyNoReading,
+      isMono,
+      paces,
+      lastReply,
+      ttl,
+    ] = await Promise.all([
         read($, snap),
         read($, trend),
         read($, frame),
@@ -1529,6 +1614,8 @@ export const register: Register = (on, options) => {
         read($, readError),
         read($, hasMono),
         read($, pace),
+        read($, cache),
+        read($, cacheTtl),
       ])
     // A surface draws the band though none was seen to attach: its work starts, outside this
     // render (a render never writes state).
@@ -1842,6 +1929,16 @@ export const register: Register = (on, options) => {
         rank: 5,
       })
     }
+    // Idle past the cache's lifetime (an hour until a request showed it): the next send writes
+    // the whole context to the cache again.
+    const idleMs = lastReply.repliedAt === undefined ? undefined : now - lastReply.repliedAt
+    if (!isWorking && idleMs !== undefined && idleMs >= TTL_MS[ttl ?? '1h'] && s.tokens !== undefined) {
+      line2.push({
+        segs: [{ text: `cache cold: next send re-writes ${fmtTokens(s.tokens)}`, color: 'warning' }],
+        rank: 4,
+        short: [{ text: 'cache cold', color: 'warning' }],
+      })
+    }
     // A new window (a model switch) moved the percent, not this turn: say so while it is fresh.
     if (hl('window') && s.windowFrom !== undefined) {
       line2.push({ segs: [hlSeg('window', `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`)], rank: 4 })
@@ -1913,6 +2010,8 @@ export const register: Register = (on, options) => {
 
     const line3: Group[] = [{ segs: [{ text: `session ${duration(now - s.startedAt)}` }], rank: 1 }]
     if (s.usd !== undefined) line3.push({ segs: [hlSeg('usd', `$${shown('usd', s.usd).toFixed(2)}`)], rank: 4 })
+    // how much of the last main request the cache served; first to go where room is short
+    if (lastReply.hit !== undefined) line3.push({ segs: [{ text: `cache ${Math.round(lastReply.hit * 100)}%` }], rank: 1 })
     s.limits.forEach((l, i) => {
       const key = `limit:${l.kind}`
       // At the recent pace it runs out before it resets: "5h 72% full in ~48m", in red.

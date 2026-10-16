@@ -2,6 +2,16 @@ export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
 export type Category = { name: string; tokens: number }
 
+/** How long the prompt cache lives after a reply, as the requests showed it (`ttlFrom`); kept in the store between sessions. */
+export type CacheTtl = '5m' | '1h'
+
+/**
+ * The main thread's last reply, for the cache: when it came, the share of its request the
+ * cache served (0 to 1), and the model and effort it was sent with (a change of either
+ * starts a new cache, so the next request tells nothing of its lifetime).
+ */
+export type CacheReading = { repliedAt?: number; hit?: number; model?: string; effort?: string | number }
+
 /** A rate-limit window's recent readings, oldest first, for its pace: kept while the window (its `resetsAt`) stays the same. */
 export type LimitPace = { resetsAt?: string; samples: { at: number; percent: number }[] }
 
@@ -83,6 +93,10 @@ declare module 'claude-code' {
       hasMono: boolean
       /** Each rate-limit window's readings of the last half hour, by kind, for its pace. */
       pace: Record<string, LimitPace>
+      /** The main thread's last reply, for the cache's warmth and hit rate; empty in a new conversation. */
+      cache: CacheReading
+      /** How long the cache lives, once a request showed it; null until then. */
+      cacheTtl: CacheTtl | null
     }
   }
 }
