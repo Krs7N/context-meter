@@ -97,6 +97,8 @@ declare module 'claude-code' {
       cache: CacheReading
       /** How long the cache lives, once a request showed it; null until then. */
       cacheTtl: CacheTtl | null
+      /** The compact button: `ask` while it asks to confirm, `running` while the compaction it started runs. */
+      compactStep: 'none' | 'ask' | 'running'
     }
   }
 }

@@ -18,6 +18,7 @@ const hasMono = atom({ plugin: 'context-meter', key: 'hasMono' } as const, false
 const pace = atom({ plugin: 'context-meter', key: 'pace' } as const, {} as Record<string, LimitPace>)
 const cache = atom({ plugin: 'context-meter', key: 'cache' } as const, {} as CacheReading)
 const cacheTtl = atom({ plugin: 'context-meter', key: 'cacheTtl' } as const, null as CacheTtl | null)
+const compactStep = atom({ plugin: 'context-meter', key: 'compactStep' } as const, 'none' as 'none' | 'ask' | 'running')
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -1376,6 +1377,57 @@ async function noteCache(
   }
 }
 
+/**
+ * A main-conversation compaction stands. No measure follows until the next reply, and the
+ * engine installs the compacted conversation only once every hook returned (usage() still
+ * reads the old fill), so until the next reply the fill is what it left. Its cache is new: the
+ * next request tells nothing of the cache's lifetime. Recording it twice changes nothing.
+ */
+async function noteCompaction($: EngineInterface, freed: { tokensBefore?: number; tokensAfter?: number }): Promise<void> {
+  try {
+    await update($, snap, s =>
+      s === null
+        ? s
+        : {
+            ...s,
+            compaction: { before: freed.tokensBefore ?? s.tokens ?? s.compaction?.before, after: freed.tokensAfter },
+            tokens: undefined,
+            percent: undefined,
+            turnBase: undefined,
+          },
+    )
+    await update($, cache, c => ({ ...c, repliedAt: undefined }))
+  } catch {
+    // drawing state is best effort
+  }
+}
+
+/**
+ * The compact button's `yes`: compacts the conversation now, as `/compact` does without
+ * instructions. The session.compact hook records what it freed; a skip says why in a toast.
+ */
+async function compactNow($: EngineInterface): Promise<void> {
+  try {
+    await update($, compactStep, () => 'running')
+    const result = await $.session.compact()
+    // the engine passes this plugin's own call by its session.compact hook: record it here
+    if (result.skip !== undefined) await $.ui.toast(`Not compacted: ${result.skip}`)
+    else await noteCompaction($, result)
+  } catch (err) {
+    try {
+      await $.ui.toast(`Compaction failed: ${errorText(err)}`)
+    } catch {
+      // nothing more to tell
+    }
+  } finally {
+    try {
+      await update($, compactStep, () => 'none')
+    } catch {
+      // drawing state is best effort
+    }
+  }
+}
+
 /** The cache's lifetime an earlier session learned, if any. */
 async function loadCacheTtl($: EngineInterface): Promise<void> {
   try {
@@ -1506,6 +1558,8 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     startTicker($)
     await markActive($)
+    // a prompt moves on from an unanswered "compact now?"
+    void update($, compactStep, v => (v === 'ask' ? 'none' : v)).catch(() => undefined)
     // A typed `/effort max` or `/effort ultracode` is session-only and saved nowhere
     // the mod can read; take it from the command line itself.
     const asked = parseEffortCommand(e.text)
@@ -1559,25 +1613,7 @@ export const register: Register = (on, options) => {
   // still read the old fill here: until the next reply, the fill is what the compaction left.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
-      try {
-        await update($, snap, s =>
-          s === null
-            ? s
-            : {
-                ...s,
-                compaction: { before: result.tokensBefore ?? s.tokens, after: result.tokensAfter },
-                tokens: undefined,
-                percent: undefined,
-                turnBase: undefined,
-              },
-        )
-        // the compacted conversation is a new cache: the next request tells nothing of its lifetime
-        await update($, cache, c => ({ ...c, repliedAt: undefined }))
-      } catch {
-        // drawing state is best effort
-      }
-    }
+    if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) await noteCompaction($, result)
     return result
   }).catch(($, e, next) => next(e))
 
@@ -1600,6 +1636,7 @@ export const register: Register = (on, options) => {
       paces,
       lastReply,
       ttl,
+      compactAsked,
     ] = await Promise.all([
         read($, snap),
         read($, trend),
@@ -1616,6 +1653,7 @@ export const register: Register = (on, options) => {
         read($, pace),
         read($, cache),
         read($, cacheTtl),
+        read($, compactStep),
       ])
     // A surface draws the band though none was seen to attach: its work starts, outside this
     // render (a render never writes state).
@@ -2032,6 +2070,18 @@ export const register: Register = (on, options) => {
       })
     })
     const detailsLabel = isDetailed ? 'hide' : 'details'
+    // Once the bar warns (or the context is over the window), a button to compact now, after a
+    // confirm; not while Claude works. A compaction it started shows until it ends.
+    const canCompact = !isWorking && s.tokens !== undefined && (fill !== 'claude' || over !== undefined)
+    const compactShown = compactAsked === 'running' ? 'running' : canCompact ? compactAsked : undefined
+    const compactText =
+      compactShown === 'running'
+        ? ' · compacting…'
+        : compactShown === 'ask'
+          ? ' · compact now? yes · no'
+          : compactShown === 'none'
+            ? ' · compact'
+            : ''
 
     // Pieces keep their width; the row clips at its edge instead of squeezing them onto each other.
     const row = (key: string, groups: Seg[][]) => (
@@ -2071,7 +2121,36 @@ export const register: Register = (on, options) => {
           {meter}
           {row('line2', fitGroups(line2, statsCells))}
           <Box key="line3" flexDirection="row" overflow="hidden">
-            {row('line3segs', fitGroups(line3, statsCells - cellsOf(` · ${detailsLabel}`)))}
+            {row('line3segs', fitGroups(line3, statsCells - cellsOf(` · ${detailsLabel}`) - cellsOf(compactText)))}
+            {compactShown === undefined ? null : (
+              <Box key="compact-box" flexDirection="row" flexShrink={0}>
+                <Text dimColor>{' · '}</Text>
+                {compactShown === 'running' ? (
+                  <Text dimColor>compacting…</Text>
+                ) : compactShown === 'ask' ? (
+                  <Box key="compact-ask" flexDirection="row">
+                    <Text color="warning">compact now? </Text>
+                    <Button key="compact-yes" label="yes" plain onPress={() => compactNow($)} />
+                    <Text dimColor>{' · '}</Text>
+                    <Button
+                      key="compact-no"
+                      label="no"
+                      dimColor
+                      plain
+                      onPress={() => update($, compactStep, () => 'none')}
+                    />
+                  </Box>
+                ) : (
+                  <Button
+                    key="compact"
+                    label="compact"
+                    dimColor
+                    plain
+                    onPress={() => update($, compactStep, () => 'ask')}
+                  />
+                )}
+              </Box>
+            )}
             <Box key="details-box" flexShrink={0}>
               <Text dimColor>{' · '}</Text>
               <Button

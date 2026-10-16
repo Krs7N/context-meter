@@ -1794,6 +1794,42 @@ describe('cold cache', () => {
     await ui.unmount()
   })
 
+  test('a new cache tells nothing of its lifetime: after a compaction, on another effort, after /clear', { timeoutMs: 30_000 }, async ($, on) => {
+    let read = 50_000
+    const stored: Record<string, unknown> = {}
+    on('store.get', ($, e) => ({ value: stored[e.key] }) as never)
+    on('store.set', ($, e) => {
+      stored[e.key] = e.value
+      return { value: undefined } as never
+    })
+    on('session.usage', () => ({ value: usage(60_000, 30) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+    on('session.compact', () => ({ messages: [SUMMARY], tokensBefore: 60_000, tokensAfter: 20_000 }))
+    on('turn.step', answering(() => used(read, 58_000 - read)))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    await request($, 'high')
+    await $.session.compact({ trigger: 'manual', messages: [ASKED, SUMMARY] })
+    await clock.advance(6 * M)
+    read = 0
+    await request($, 'high')
+    expect(stored.cacheTtl).toBeUndefined()
+    await clock.advance(6 * M)
+    await request($, 'low')
+    expect(stored.cacheTtl).toBeUndefined()
+    // the same cache past 5 minutes: now it tells
+    await clock.advance(6 * M)
+    await request($, 'low')
+    expect(stored.cacheTtl).toBe('5m')
+    // a new conversation has served nothing from the cache yet
+    await $.session.end({ reason: 'clear', sessionId: 'old', resume: { id: 'old' } })
+    await clock.advance(1000)
+    const ui = await band($, 200)
+    expect(drawn(await ui.find({ key: 'line3segs' }))).not.toMatch(/cache/)
+    await ui.unmount()
+  })
+
   test('a lifetime learned in an earlier session holds from the start', { timeoutMs: 30_000 }, async ($, on) => {
     on('store.get', ($, e) => ({ value: e.key === 'cacheTtl' ? '5m' : undefined }) as never)
     on('session.usage', () => ({ value: usage(60_000, 30) }))
@@ -1809,6 +1845,93 @@ describe('cold cache', () => {
     const working = await band($, 200, true)
     expect(drawn(await working.find({ key: 'line2' }))).not.toMatch(/cache cold/)
     await working.unmount()
+    await ui.unmount()
+  })
+})
+
+describe('compact button', () => {
+  test('once the bar warns, row 3 offers to compact, after a confirm', async ($, on) => {
+    let compactions = 0
+    on('session.usage', () => ({ value: usage(170_000, 85) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.compact', () => {
+      compactions++
+      return { messages: [SUMMARY], tokensBefore: 170_000, tokensAfter: 31_000 }
+    })
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 200)
+    expect((await ui.find({ key: 'compact' }))?.props.label).toBe('compact')
+    // a press asks first
+    await ui.press({ key: 'compact' })
+    expect(compactions).toBe(0)
+    expect(await ui.find({ type: 'Text', text: 'compact now? ' })).toBeDefined()
+    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    await ui.press({ key: 'compact-no' })
+    expect(await ui.find({ key: 'compact-yes' })).toBeUndefined()
+    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    expect(compactions).toBe(0)
+    await ui.press({ key: 'compact' })
+    await ui.press({ key: 'compact-yes' })
+    expect(compactions).toBe(1)
+    // what it left, and no button once the bar is orange again
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/compacted 170\.0k → 31\.0k/)
+    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('no button while the bar is orange or Claude works', async ($, on) => {
+    let current = usage(84_000, 42)
+    on('session.usage', () => ({ value: current }))
+    on('session.start', () => ({ cwd: '.' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const calm = await band($, 200)
+    expect(await calm.find({ key: 'compact' })).toBeUndefined()
+    await calm.unmount()
+    current = usage(170_000, 85)
+    await $.session.start(START)
+    // once the bar has counted up to red, the button is there between turns only
+    await clock.advance(7000)
+    const idle = await band($, 200)
+    expect(await idle.find({ key: 'compact' })).toBeDefined()
+    await idle.unmount()
+    const working = await band($, 200, true)
+    expect(await working.find({ key: 'compact' })).toBeUndefined()
+    await working.unmount()
+  })
+
+  test('a prompt moves on from an unanswered confirm', async ($, on) => {
+    on('session.usage', () => ({ value: usage(170_000, 85) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 200)
+    await ui.press({ key: 'compact' })
+    expect(await ui.find({ key: 'compact-yes' })).toBeDefined()
+    await $.prompt.submit({ text: 'go on', wait: false, origin: { kind: 'composer' } })
+    expect(await ui.find({ key: 'compact-yes' })).toBeUndefined()
+    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a compaction Claude Code skips says why, and the button comes back', async ($, on) => {
+    const toasts: string[] = []
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+      return { value: undefined } as never
+    })
+    on('session.usage', () => ({ value: usage(170_000, 85) }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.compact', () => ({ skip: 'a hook kept the conversation as it is' }))
+    mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    const ui = await band($, 200)
+    await ui.press({ key: 'compact' })
+    await ui.press({ key: 'compact-yes' })
+    expect(toasts).toEqual(['Not compacted: a hook kept the conversation as it is'])
+    expect(await ui.find({ key: 'compact' })).toBeDefined()
     await ui.unmount()
   })
 })
