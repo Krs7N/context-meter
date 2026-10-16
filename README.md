@@ -30,14 +30,24 @@ Requires Claude Code 2.1.295 or later. Claude Code Desktop runs its own bundled 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `sleepAfterMinutes` ("Clawd naps after (minutes)") | `5` | Minutes without activity before Clawd falls asleep. `0` keeps him awake. |
+| `showClawd` ("Show Clawd") | on | Off: no mascot, and the stats take his 15 cells. |
+| `reduceMotion` ("Reduce motion") | off | On: numbers land at once instead of counting up, and Clawd neither types, blinks nor shakes (his zZ stops growing). His face and colour still follow the bar. The fast timer never runs. |
+| `layout` ("Layout") | `auto` | `auto`: the full band where it fits, else one line. `one-line`: always the one-line meter. |
+| `showCost` ("Show the session's cost") | on | The `$` figure in row 3. |
+| `showRateLimits` ("Show rate limits") | on | The `5h`, `7d` and `spend` windows in row 3, with their resets and pace. |
+| `showCompactButton` ("Show the compact button") | on | The **compact** button once the bar turns amber or red. |
+| `warnAt` ("Bar turns amber at …") | `75` | How far toward auto-compact, in percent, the bar turns amber and Clawd gets annoyed. With no auto-compact point known, the way to 80 % of the window. |
+| `alertAt` ("Bar turns red at …") | `95` | The same for red, Clawd fuming. Below `warnAt`, both keep their defaults. |
+| `cacheLifetime` ("Prompt-cache lifetime") | `auto` | `auto`: learned from your requests ([Cold cache](#cold-cache)). `5m` or `1h`: always that. |
+| `models` ("Models in the model picker") | `haiku, sonnet, opus, fable` | The picker's entries as `/model` takes them, separated by commas or spaces, smallest first: a family, `opus[1m]` (1M window), `best`, `opusplan` or a model id. |
 
-Change it in `/config`, where it is a row of its own, or from a shell:
+Change them in `/config`, where each is a row of its own, or from a shell:
 
 ```
-echo '{"sleepAfterMinutes":"10"}' | claude plugin configure context-meter@context-meter --values-stdin
+echo '{"sleepAfterMinutes":10,"showCost":false}' | claude plugin configure context-meter@context-meter --values-stdin
 ```
 
-A change reloads the mod with the new value.
+A change reloads the mod with the new values. A value out of range keeps its default.
 
 ### Run it from a clone instead
 
@@ -63,7 +73,7 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 | 3 | session duration, session cost, how much of the last request the cache served, rate-limit windows (`5h`, `7d`, `spend`), each with a countdown to its reset, then the **compact** button once the bar warns: `session 1h 3m · $4.20 · cache 97% · 5h 72% full in ~48m, resets 2h 14m · 7d 41% resets 3d 4h · compact` | `startedAt` and the clock, `cost.usd`, the main request's usage, `rateLimits` (`percentUsed`, `resetsAt`) and the `pace` state |
 | 4 (optional) | the 5 largest used categories, as `/context` splits them | `breakdown.categories` (kind `used`) — toggled by the **details** button |
 
-- Bar color: Claude orange (`claude` theme key), then `warning` and `error` as the fill nears the auto-compact point (from three quarters of the way, and from 95 %). With no auto-compact point known: `warning` from 60 %, `error` from 80 % of the window (`fillColor`). Clawd changes with it (see [The mascot](#the-mascot-clawd)).
+- Bar color: Claude orange (`claude` theme key), then `warning` and `error` as the fill nears the auto-compact point (from three quarters of the way, and from 95 %; the `warnAt` and `alertAt` settings). With no auto-compact point known, the way to 80 % of the window: `warning` from 60 %, `error` from 76 % (`fillColor`). Clawd changes with it (see [The mascot](#the-mascot-clawd)).
 - The bar fills in eighth-block steps (`▏▎▍▌▋▊▉█`), so it moves smoothly. It is up to 40 cells wide.
 - A `┊` mark on the empty part shows where auto-compaction runs.
 - The meter moves with each model request of a running turn, not only when the turn ends.

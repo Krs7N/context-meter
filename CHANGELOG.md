@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 — 2026-10-16
+
+- More settings in `/config`: hide Clawd (`showClawd`, the stats take his room), `reduceMotion` (no count-up, a Clawd who keeps still), the `one-line` layout everywhere, hide the cost, the rate limits or the compact button, where the bar turns amber and red (`warnAt`, `alertAt`, with Clawd's moods), a fixed `cacheLifetime` (`5m` or `1h`), and the `models` the model picker lists (`opus[1m]`, `best`, model ids).
+- With no auto-compact point known, the bar now measures the way to 80 % of the window: red from 76 % of it instead of 80 %.
+
 ## 0.4.1 — 2026-10-16
 
 - Lighter on the machine, Claude Code Desktop most of all. The band's timer ticks every 0.7 s instead of every 0.1 s, and a faster one runs only while a number counts up: about 86 timer dispatches a minute when idle instead of 600. A reading in the middle of a turn counts up in 1 s instead of 6 s, so a long agentic turn no longer redraws the band ten times a second throughout.

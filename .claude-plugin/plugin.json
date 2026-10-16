@@ -1,6 +1,6 @@
 {
   "name": "context-meter",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "See your context window fill up as you work, no /context needed. A live band above the prompt shows an animated fill bar, token count, auto-compact headroom and the turns it lasts, usage trend, session cost, prompt-cache hits and a cold-cache warning, and rate limits with when the recent pace runs one out. It also has one-click model and effort pickers, a compact button once the context runs high, and Clawd, who types while Claude works, dresses up for the effort level, gets cross as the context fills and dozes off when you're idle.",
   "author": { "name": "Krs7N", "url": "https://github.com/Krs7N" },
   "homepage": "https://github.com/Krs7N/context-meter",
@@ -15,6 +15,72 @@
       "description": "Minutes without activity before Clawd falls asleep. 0 keeps him awake.",
       "default": 5,
       "min": 0
+    },
+    "showClawd": {
+      "type": "boolean",
+      "title": "Show Clawd",
+      "description": "Draw Clawd beside the stats. Off gives the stats his room.",
+      "default": true
+    },
+    "reduceMotion": {
+      "type": "boolean",
+      "title": "Reduce motion",
+      "description": "Numbers land at once instead of counting up, and Clawd neither types, blinks nor shakes. His face and colour still follow the bar.",
+      "default": false
+    },
+    "layout": {
+      "type": "string",
+      "title": "Layout",
+      "description": "auto: the full band where it fits, else one line. one-line: always the one-line meter.",
+      "options": ["auto", "one-line"],
+      "default": "auto"
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "Show the session's cost",
+      "description": "The $ figure in row 3.",
+      "default": true
+    },
+    "showRateLimits": {
+      "type": "boolean",
+      "title": "Show rate limits",
+      "description": "The 5h, 7d and spend windows in row 3, with their resets and pace.",
+      "default": true
+    },
+    "showCompactButton": {
+      "type": "boolean",
+      "title": "Show the compact button",
+      "description": "The compact button at the end of row 3 once the bar turns amber or red.",
+      "default": true
+    },
+    "warnAt": {
+      "type": "number",
+      "title": "Bar turns amber at (% of the way to auto-compact)",
+      "description": "With no auto-compact point known, the way to 80% of the window. Clawd gets annoyed here.",
+      "default": 75,
+      "min": 1,
+      "max": 100
+    },
+    "alertAt": {
+      "type": "number",
+      "title": "Bar turns red at (% of the way to auto-compact)",
+      "description": "At or above the amber point. Clawd fumes here and the compact button stays.",
+      "default": 95,
+      "min": 1,
+      "max": 100
+    },
+    "cacheLifetime": {
+      "type": "string",
+      "title": "Prompt-cache lifetime",
+      "description": "auto: learned from your requests. 5m or 1h: always that, for the cold-cache warning.",
+      "options": ["auto", "5m", "1h"],
+      "default": "auto"
+    },
+    "models": {
+      "type": "string",
+      "title": "Models in the model picker",
+      "description": "As /model takes them, separated by commas or spaces, smallest first: haiku, sonnet, opus, fable, opus[1m], best, opusplan or a model id.",
+      "default": "haiku, sonnet, opus, fable"
     }
   }
 }
