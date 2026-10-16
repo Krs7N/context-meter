@@ -606,6 +606,28 @@ export function trendText(tokens: readonly number[], window: number): string {
   return `trend ${sparkline(shown)} ${ends}`
 }
 
+/** Turn growths a forecast averages: the last few that grew (a compaction's drop is none). */
+const FORECAST_TURNS = 5
+
+/**
+ * About how many turns fit in `room` tokens: the room over the average growth of the last
+ * FORECAST_TURNS turns that grew, taken from the trend (tokens at each turn end), rounded up.
+ * Nothing with fewer than two growths, no room, or 100 turns or more.
+ */
+export function turnsLeft(trendTokens: readonly number[], room: number): number | undefined {
+  const growths = trendTokens
+    .slice(1)
+    .map((t, i) => t - (trendTokens[i] ?? t))
+    .filter(g => g > 0)
+    .slice(-FORECAST_TURNS)
+  if (growths.length < 2 || room <= 0) return undefined
+  const turns = Math.max(1, Math.ceil(room / (growths.reduce((a, b) => a + b, 0) / growths.length)))
+  return turns < 100 ? turns : undefined
+}
+
+/** "~6 turns", "~1 turn". */
+const turnsText = (n: number) => `~${n} turn${n === 1 ? '' : 's'}`
+
 /** "42m", "3h 5m", and from a day on "1d 2h". */
 export function duration(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000))
@@ -1774,16 +1796,22 @@ export const register: Register = (on, options) => {
       line2.push({ segs: [hlSeg('window', `window ${fmtTokens(s.windowFrom)} → ${fmtTokens(s.window)}`)], rank: 4 })
     }
     if (s.compactAt !== undefined && over === undefined) {
-      // "┊ auto-compact at 167.0k (83.0k left)" — the same ┊ as the bar's compaction mark
+      // "┊ auto-compact at 167.0k (83.0k left, ~6 turns)" — the same ┊ as the bar's compaction mark
       const seg: Seg[] = [{ text: `┊ auto-compact at ${fmtTokens(s.compactAt)}` }]
       let short: Seg[] | undefined
       if (headroom !== undefined) {
         const left = hlSeg('headroom', fmtTokens(shown('headroom', Math.max(0, headroom))))
-        seg.push({ text: ' (' }, left, { text: ' left)' })
-        // short: "┊ 83.0k left"
-        short = [{ text: '┊ ' }, left, { text: ' left' }]
+        const turns = turnsLeft(trendTokens, headroom)
+        const after = turns === undefined ? ' left' : ` left, ${turnsText(turns)}`
+        seg.push({ text: ' (' }, left, { text: `${after})` })
+        // short: "┊ 83.0k left, ~6 turns"
+        short = [{ text: '┊ ' }, left, { text: after }]
       }
       line2.push({ segs: seg, rank: 3, short })
+    } else if (s.isAutoCompact === false && s.tokens !== undefined && over === undefined) {
+      // no auto-compaction to catch it: the turns until the window is full
+      const turns = turnsLeft(trendTokens, s.window - s.tokens)
+      if (turns !== undefined) line2.push({ segs: [{ text: `window full in ${turnsText(turns)}` }], rank: 3 })
     }
     // While Claude works, the running turn's growth so far; between turns, the last turn's.
     const turnGrowth =

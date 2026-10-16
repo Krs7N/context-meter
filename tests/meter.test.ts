@@ -26,6 +26,7 @@ import {
   takesMono,
   toSnapshot,
   trendText,
+  turnsLeft,
   tween,
 } from '../hooks/register'
 
@@ -1601,4 +1602,50 @@ test('a short band slot gets the one-line meter', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /▐▛███▜▌/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /▄▄█████▄▄/ })).toBeUndefined()
   await ui.unmount()
+})
+
+describe('turns to compact', () => {
+  test('the room left over the recent turns’ growth, rounded up', async () => {
+    expect(turnsLeft([100_000, 110_000, 120_000], 47_000)).toBe(5)
+    // a compaction's drop is no turn's growth
+    expect(turnsLeft([100_000, 120_000, 40_000, 50_000], 60_000)).toBe(4)
+    // the last five growths only
+    expect(turnsLeft([0, 10_000, 20_000, 30_000, 40_000, 50_000, 150_000], 56_000)).toBe(2)
+    // less room than a turn takes: the next one
+    expect(turnsLeft([100_000, 110_000, 120_000], 4_000)).toBe(1)
+  })
+
+  test('no forecast without two growths, without room, or past 99 turns', async () => {
+    expect(turnsLeft([100_000, 110_000], 47_000)).toBeUndefined()
+    expect(turnsLeft([100_000, 90_000, 95_000], 47_000)).toBeUndefined()
+    expect(turnsLeft([100_000, 110_000, 120_000], 0)).toBeUndefined()
+    expect(turnsLeft([0, 1_000, 2_000], 200_000)).toBeUndefined()
+  })
+
+  test('row 2 says how many turns are left, to auto-compact or with it off to a full window', async ($, on) => {
+    let tokens = 100_000
+    let compactAt: number | undefined = 167_000
+    const reading = () => usageIn(200_000, tokens, breakdownOf({ window: 200_000, tokens, compactAt }))
+    on('session.usage', () => ({ value: reading() }))
+    on('session.start', () => ({ cwd: '.' }))
+    on('session.measure', ($, e) => ({ changed: e.changed }))
+    on('turn.complete', () => ({ text: '' }))
+    const clock = mock.clock(on, { now: 600_000 })
+    await $.session.start(START)
+    for (const t of [110_000, 120_000]) {
+      tokens = t
+      await turnEnds($, reading())
+    }
+    await clock.advance(7000)
+    const ui = await band($, 200)
+    expect(drawn(await ui.find({ key: 'line2' }))).toMatch(/┊ auto-compact at 167\.0k \(47\.0k left, ~5 turns\)/)
+    await ui.unmount()
+    compactAt = undefined
+    tokens = 130_000
+    await turnEnds($, reading())
+    await clock.advance(7000)
+    const off = await band($, 200)
+    expect(drawn(await off.find({ key: 'line2' }))).toMatch(/window full in ~7 turns/)
+    await off.unmount()
+  })
 })
