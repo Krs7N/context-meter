@@ -2,12 +2,14 @@
 
 See your context window fill up as you work, without typing `/context`. A live band
 above the prompt shows an animated fill bar, the token count, headroom before
-auto-compaction, the usage trend, the session's length and cost, and the rate limits with
-when each resets. It also has one-click model and effort pickers and Clawd, who types while
-Claude works, dresses up for the effort level, gets cross as the context fills up and naps
-when you're idle.
+auto-compaction and about how many turns it lasts, the usage trend, the session's length
+and cost, how much the prompt cache served and when it has gone cold, and the rate limits
+with when each resets, or when the recent pace runs one out first. It also has one-click
+model and effort pickers, a compact button once the context runs high, and Clawd, who types
+while Claude works, dresses up for the effort level, gets cross as the context fills up and
+naps when you're idle.
 
-![context-meter above the Claude Code prompt, with the details row and the effort picker open](docs/context-meter.png)
+![context-meter above the Claude Code prompt: Clawd in his xhigh glasses beside the fill bar at 51 %, the auto-compact headroom, this turn's growth and the trend, then the session's length, cost and rate limits](docs/context-meter.png)
 
 ## Install
 
@@ -57,8 +59,8 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 | Row | Content | Source |
 | --- | --- | --- |
 | 1 | `Context` + fill bar + percent + `tokens / window`; model badge and effort badge on the right | `$.session.usage().context` (`tokens`, `window`, `percent`); model and effort: see below |
-| 2 | in this order, each only when it applies: `! 150.0k over the 200.0k window: next send compacts` (or `: /compact before sending` with auto-compaction off), in red; `window 1.00M → 200.0k` for about 10 s after a model switch; `┊ auto-compact at 167.0k (83.0k left)` (the same `┊` as on the bar); the turn: `this turn +12.0k` while Claude works, `compacted 182.0k → 31.0k` after a compaction, else `last turn +3.2k`; fill trend `trend ▁▂▃▅▇ 12→42%` | `context.breakdown`; each main-thread request's usage; the turn ends; `trend` state |
-| 3 | session duration, session cost, rate-limit windows (`5h`, `7d`, `spend`), each with a countdown to its reset: `session 1h 3m · $4.20 · 5h 23% resets 2h 14m · 7d 41% resets 3d 4h` | `startedAt` and the clock, `cost.usd`, `rateLimits` (`percentUsed`, `resetsAt`) |
+| 2 | in this order, each only when it applies: `! 150.0k over the 200.0k window: next send compacts` (or `: /compact before sending` with auto-compaction off), in red; `cache cold: next send re-writes 162.0k` in amber (see [Cold cache](#cold-cache)); `window 1.00M → 200.0k` for about 10 s after a model switch; `┊ auto-compact at 167.0k (83.0k left, ~6 turns)` (the same `┊` as on the bar), or with auto-compaction off `window full in ~6 turns`; the turn: `this turn +12.0k` while Claude works, `compacted 182.0k → 31.0k` after a compaction, else `last turn +3.2k`; fill trend `trend ▁▂▃▅▇ 12→42%` | `context.breakdown`; each main-thread request's usage; the turn ends; `trend` and `cache` state |
+| 3 | session duration, session cost, how much of the last request the cache served, rate-limit windows (`5h`, `7d`, `spend`), each with a countdown to its reset, then the **compact** button once the bar warns: `session 1h 3m · $4.20 · cache 97% · 5h 72% full in ~48m, resets 2h 14m · 7d 41% resets 3d 4h · compact` | `startedAt` and the clock, `cost.usd`, the main request's usage, `rateLimits` (`percentUsed`, `resetsAt`) and the `pace` state |
 | 4 (optional) | the 5 largest used categories, as `/context` splits them | `breakdown.categories` (kind `used`) — toggled by the **details** button |
 
 - Bar color: Claude orange (`claude` theme key), then `warning` and `error` as the fill nears the auto-compact point (from three quarters of the way, and from 95 %). With no auto-compact point known: `warning` from 60 %, `error` from 80 % of the window (`fillColor`). Clawd changes with it (see [The mascot](#the-mascot-clawd)).
@@ -74,13 +76,35 @@ On Windows, separate several paths with `;`. On macOS and Linux, use `:`.
 - Below 72 columns, when the badges leave too little room beside Clawd for the bar, the percent and the tokens, or when the full band (an open picker included) is taller than the room above the prompt (`maxRows`, a short fullscreen terminal), only row 1 and the two badges are drawn, without frame and mascot. Where even an open picker column is taller than that room, its choices are drawn in a row instead of the meter until it closes.
 - Nothing is cut mid-figure. Where a row lacks room it leaves out whole pieces:
   - the meter row drops the word `tokens`, then `Context`, then the window, then the token count, and the bar shrinks last;
-  - row 2 shortens `┊ auto-compact at 167.0k (83.0k left)` to `┊ 83.0k left`, then leaves out the trend, then the turn's growth;
-  - row 3 first drops each window's reset countdown (the `7d` one first) and keeps its percent, then leaves out the session's length, then the rate limits, the cost last.
+  - row 2 shortens `┊ auto-compact at 167.0k (83.0k left, ~6 turns)` to `┊ 83.0k left, ~6 turns` and the cold-cache warning to `cache cold`, then leaves out the trend, then the turn's growth;
+  - row 3 first drops each window's reset countdown (the `7d` one first) and keeps its percent and any `full in` warning, then leaves out the cache's share, then the session's length, then the rate limits, the cost last. The **compact** and **details** buttons always keep their room.
 - The session clock and the reset countdowns run between readings. A window whose reset time is unknown or already past shows its percent alone.
 - Before the first reply of a session (or right after `/clear`) the token count shows "waiting for the first reply". Right after a compaction it shows what the compaction left, `~31.0k / 200.0k tokens`, until the next reply.
 - `/clear` and `/resume` start the meter over: no growth or trend is measured against the conversation before.
 - In Claude Code Desktop Clawd is drawn as one picture (`clawdSvg`), so he looks as he does in the terminal; the badges and picker options are Desktop's own buttons. The band's text is set in the monospaced face where Desktop's engine supports it (2.1.299 or later, read with `$.session.version()`). An older engine refuses the whole band over that setting, so there, or while the version is unknown, the text uses Desktop's page font.
 - Until the first reading, the band is one line: `Context waiting for the first reply`, or, where reading the usage fails, `reading failed on desktop: <why>` in `warning`. The reason also goes to the debug log (`claude --debug`).
+
+## Looking ahead
+
+### Turns to compact
+
+`┊ auto-compact at 167.0k (83.0k left, ~6 turns)`: the tokens left before auto-compaction over the average growth of the last 5 turns that grew (a compaction's drop is not a turn's growth), rounded up (`turnsLeft`). With auto-compaction off it counts toward a full window instead: `window full in ~6 turns`. Nothing shows before two turns have grown, or from 100 turns on.
+
+### Rate-limit pace
+
+Each rate-limit window keeps its readings of the last half hour, about one a minute (`withReadings`, the `pace` state); a new window (another reset time) or a drop starts them over. Once they span 10 minutes and rose a point, and while the newest is under 10 minutes old, a window that the recent pace would use up before it resets says when: `5h 72% full in ~48m, resets 2h 14m`, the warning in red (`fullIn`).
+
+### Cold cache
+
+- `cache 97%` in row 3: how much of the last main-thread request the prompt cache served (`cache_read` over all its input). The first request of a conversation reads nearly nothing.
+- Idle past the cache's lifetime, row 2 opens with `cache cold: next send re-writes 162.0k` in amber: the next send writes the whole context to the cache again, at the cache-write rate. Not while Claude works.
+- The plugin API does not give the cache's lifetime, so the requests show it (`ttlFrom`). A request sent more than 5 minutes after the last reply, on the same model and effort, that still read most of its input from the cache means it lives an hour. One that had to write most of it again means 5 minutes. A compaction, another model or effort, or `/clear` starts a new cache, which tells nothing. What was learned is kept in the mod's store (`cacheTtl`) for later sessions. Until a request has shown it, the warning assumes an hour, so it never says "cold" too early.
+- No `$` estimate: token prices are not in the plugin API, and subscription plans do not pay per token.
+- If Claude Code renews the cache in the background, the cache can stay warm longer than the warning assumes.
+
+### Compact button
+
+Once the bar turns amber or red (or the context is over the window), and while Claude is not working, row 3 ends `· compact · details`. A press asks `compact now? yes · no`; **yes** compacts the conversation as `/compact` does without instructions (`$.session.compact()`), shows `compacting…`, then `compacted 182.0k → 31.0k` in row 2. If Claude Code skips the compaction, a toast says why. A prompt moves on from an unanswered confirm. For a compaction with instructions, type `/compact <what to keep>`.
 
 ## Model badge
 
@@ -163,8 +187,8 @@ Every `/effort` writes a line to the debug log (`claude --debug`): `context-mete
 | `session.attach` / `session.detach` | Claude Code Desktop joining starts the band's work with a fresh reading; the last drawing client leaving stops it |
 | `turn.complete` | the end of a main-thread turn: a reading with breakdown, the turn's growth and a trend point |
 | `session.measure` | a plain reading, after each turn and whenever a rate-limit window moves (mid-turn too) |
-| `turn.step` | each main-thread request: its effort level, then a live reading from the response's own usage |
-| `session.compact` | a main-conversation compaction: records what it freed and redraws |
+| `turn.step` | each main-thread request: its effort level, then a live reading from the response's own usage, and the cache's share and lifetime |
+| `session.compact` | a main-conversation compaction: records what it freed and redraws (the compact button records its own) |
 | `session.end` | `/clear` and `/resume`: start the meter over; anything else: stops the animation loop |
 | `prompt.submit` | wakes Clawd; reads a typed `/effort …` |
 | `command.run` (`effort`) | reads the level and ultracode state back from `/effort`'s output |
@@ -183,7 +207,7 @@ the plain figures, which cost nothing.
 | `.claude-plugin/plugin.json` | manifest (name, version, description, `types`) |
 | `hooks/hooks.json` | points to the hooks module |
 | `hooks/register.tsx` | all logic: refresh, animation, rendering, formatting helpers |
-| `types/index.d.ts` | state contract under `context-meter`: `snap`, `trend`, `frame`, `effort`, `model`, the pickers' open flags, … |
+| `types/index.d.ts` | state contract under `context-meter`: `snap`, `trend`, `frame`, `effort`, `model`, the pickers' open flags, `pace`, `cache`, `cacheTtl`, `compactStep`, … |
 | `tests/meter.test.ts` | formatting, band contents and redraw, layouts, model switches, live readings, `/clear`, `/resume`, `/compact`, blink timing |
 | `README.md` | this document |
 

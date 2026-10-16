@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-context-meter is a Claude Code **mod**: a hooks-module plugin (no build step, no package.json) that draws a live band above the prompt with the context window's fill bar, tokens, auto-compact headroom, trend, cost and rate limits, plus a model picker, an effort picker and Clawd the mascot. The repo is also its own marketplace (`/plugin install context-meter --marketplace Krs7N/context-meter`). It runs on Claude Code 2.1.295+ (Claude Code Desktop's bundled engine) and was last worked on 2.1.301. The plugin API is early access and changes between releases.
+context-meter is a Claude Code **mod**: a hooks-module plugin (no build step, no package.json) that draws a live band above the prompt with the context window's fill bar, tokens, auto-compact headroom and the turns it lasts, trend, cost, the prompt cache's hits and coldness, and rate limits with their pace, plus a model picker, an effort picker, a compact button and Clawd the mascot, whose mood follows the bar. The repo is also its own marketplace (`/plugin install context-meter --marketplace Krs7N/context-meter`). It runs on Claude Code 2.1.295+ (Claude Code Desktop's bundled engine) and was last worked on 2.1.301. The plugin API is early access and changes between releases.
 
 ## Commands
 
@@ -12,7 +12,7 @@ Run these from the folder that **contains** the repo (the commands take the mod'
 
 ```
 claude plugin validate context-meter     # manifest, hooks module and $.state contract; warnings only is a pass
-claude plugin test context-meter         # every tests/*.test.ts, in the engine's own test kit (~10 s)
+claude plugin test context-meter         # every tests/*.test.ts, in the engine's own test kit (~12 s)
 claude --plugin-dir ./context-meter      # run it in a real session; hot-reloads on save
 ```
 
@@ -45,6 +45,11 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
 - **Settings.** `plugin.json` `userConfig` declares the options (`sleepAfterMinutes`, default 5, `0` never). `register(on, options)` reads them into module variables (`sleepAfterTicks` via `sleepTicks`); a change in `/config` reloads the module with the new values. A test passes them with `test(name, { options }, body)`.
 - **One timer.** Every animation (count-up, Clawd's frames, blink, sleep) and the 1.4 s polls (saved effort, `$.session.model()`) run on a single `$.clock.every(100)` ticker (`startTicker`/`onTick`). A hook's own `sleep` loops die with its dispatch budget, so don't add them.
 - **Render.** The band redraws when an atom it read changes; `frame` changes every 0.7 s, so the band redraws at least that often. It picks the one-line layout below 72 columns, when the stats column is too narrow for the bar, the percent and the tokens, or when the full band (an open picker included) is taller than `props.maxRows`. Otherwise it draws the full layout: Clawd (`clawdRows`, 13 cells wide in every outfit) beside three stats rows. Elements come from `$.ui.resolve(e)`, never globals.
+- **Looking ahead.**
+  - `turnsLeft` divides the room left (to `compactAt`, or the window with auto-compact off) by the average of the last 5 positive growths in `trend`.
+  - `withReadings` keeps each rate-limit window's readings of the last 30 min in `pace` (refresh adds one; a new `resetsAt` or a drop starts over). `fullIn` projects the recent rise to 100 % and says nothing when it comes after the reset, spans under 10 min or the newest reading is over 10 min old.
+  - The cache: `turn.step` (main loop) takes `$.clock.now()` before `next` without awaiting it, then `noteCache` stores the reply time, hit share, model and effort in `cache`. `ttlFrom` learns `cacheTtl` from a request sent 5.5–55 min after the last reply on the same model and effort, kept in `$.store` (`cacheTtl`), loaded by `wake`. A compaction (`noteCompaction`) and `startOver` reset the reply. The render warns once idle ≥ `TTL_MS[ttl ?? '1h']`.
+  - The compact button: `compactStep` (`none`/`ask`/`running`); `compactNow` calls `$.session.compact()` and records the result through `noteCompaction` itself; `prompt.submit` clears an `ask`.
 - **Clawd's mood.** `moodFor` reads it from the bar's colour, `fillColor` of the percent shown (count-up included), so the two change together: `calm`, `annoyed` (`warning`) or `fuming` (`error`). The mood sets his body colour (`MOOD_BODY`, raw hex, the same in every theme), his eyes (`MOOD_EYES`, drawn like the shut ones) and the colour of a lit key. Fuming, he does not blink, and while awake the render passes `shake` (−1/1 by frame parity), which moves every row but the keyboard a cell (`shifted`). The calm tree is unchanged.
 - **Room.** Only where a row lacks room does it leave out pieces, whole, never cutting a figure:
   - the meter row (`planMeter`) drops the word `tokens`, then `Context`, then the window;
@@ -57,6 +62,8 @@ All logic is in `hooks/register.tsx` (`hooks/hooks.json` points at it). It expor
 - A render hook never writes state. Write from handlers (`onPress`) or other events, using `update($, atom, fn)`. `update` may run `fn` more than once.
 - Hooks on the request path (`turn.step`, and `tool.call` if one is ever added) must not await anything before `yield* next(e)` / `next(e)`.
 - Gating hooks (`command.run`, `session.compact`) carry `.catch(($, e, next) => next(e))` so a failure in the mod never blocks the command.
+- A plugin's own `$` call runs the event's chain without that plugin's hook. So `$.session.compact()` from the compact button never reaches the mod's `session.compact` hook: `compactNow` records the result itself.
+- The plugin API gives no prompt-cache lifetime and no token prices: only the classic `PreModelSwitch`/`PostModelSwitch` inputs carry `cache_ttl` and `estimated_cache_write_usd`. Hence `ttlFrom`.
 - `AbovePrompt` is raised on the **terminal** (Ink) and **desktop** (Claude Code Desktop, drawn over the wire with its own element table) surfaces only, never on mobile, VS Code, `claude -p` or cloud sessions. `e.surface` says which one is drawing.
 - **Desktop differs from the terminal.**
   - Desktop draws `Text` as a span in its page font unless the Text has `mono`, so the render hook wraps `Text` to add `mono` off the terminal, but only where the engine takes it (`hasMono`, set in `session.start` from `$.session.version()` by `takesMono`: 2.1.299 on). An older engine refuses the whole tree (`Text prop "mono" is not allowed`) and draws no band; an unknown version counts as older.
@@ -79,7 +86,9 @@ Helpers in the test file:
 - `answer` / `request` run a main-loop `turn.step`.
 - `turnEnds` ends a turn as the engine does: `turn.complete`, then `session.measure`. A test that uses it answers both events.
 
-`mock.clock(on, { now })` plus `clock.advance(ms)` drives the ticker. Because the band redraws only on 0.7 s frames, a time-based assertion must allow for the frame phase, and a blink check must span a whole 6-frame period.
+A test that answers `store.get`, `store.set` or `ui.toast` returns `{ value }` (`{ value: undefined }` for a write). `drawn(node)` joins an element's string children; a Button's `label` is a prop, so find buttons by `key`. Text elements carry no `key`.
+
+`mock.clock(on, { now })` plus `clock.advance(ms)` drives the ticker. One `advance` resolves at most 10 000 waits, so with the 100 ms ticker advance at most about 16 min at a time. Because the band redraws only on 0.7 s frames, a time-based assertion must allow for the frame phase, and a blink check must span a whole 6-frame period.
 
 ## Releases and docs
 

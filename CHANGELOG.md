@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-16
 
 - Clawd feels the context fill up, changing at the same moment as the bar. At the bar's first colour change (`warning`) he turns ember and his eyes go flat (`-_-`). When the bar turns red he turns red too and squeezes his eyes shut (`>_<`), so he stops blinking. Awake, he shakes a cell left and right each frame, and the key he hits flashes amber. This works in every outfit and on both surfaces. Asleep, he keeps the colour but rests.
+- Row 2 says about how many turns are left before auto-compaction, from the last 5 turns that grew: `┊ auto-compact at 167.0k (83.0k left, ~6 turns)`. With auto-compaction off: `window full in ~6 turns`.
+- A rate-limit window that the recent pace would use up before it resets says when, in red: `5h 72% full in ~48m, resets 2h 14m`. The pace is read over the last half hour, once it spans 10 minutes, and only while you are at it.
+- Row 3 shows how much of the last request the prompt cache served (`cache 97%`). Idle past the cache's lifetime, row 2 opens with `cache cold: next send re-writes 162.0k` in amber. The lifetime (5 minutes or an hour) is learned from the requests themselves and kept for later sessions; until then the warning waits an hour.
+- A **compact** button at the end of row 3 once the bar is amber or red, between turns. It asks `compact now? yes · no` first, then compacts as `/compact` does without instructions.
 
 ## 0.3.4 — 2026-10-15
 
